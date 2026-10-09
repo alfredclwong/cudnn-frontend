@@ -891,6 +891,80 @@ def test_bwd_model_gate_range_bf16(backend, variant):
     assert_bwd_parity(backend, make_case(variant, torch.bfloat16, T=128, lo=MODEL_GATE_LO))
 
 
+def steep_gate(case, pattern):
+    """A copy of the case whose log-decay on a few key channels drops far below the 16-token-tile range the
+    exp2(g) / exp2(-g) operand split can represent (the in-tile log2 prefix below -126, i.e. a tile sum of g
+    below -87.3).  Edits are relative to each sequence start, where the kernel tiles begin."""
+    g = case.gates["g"].clone()  # [B, T, HO, K], natural log
+    if case.varlen:
+        spans = [(0, s, e) for s, e in zip(case.cu[:-1].tolist(), case.cu[1:].tolist())]
+    else:
+        spans = [(b, 0, case.T) for b in range(case.B)]
+    for b, s, e in spans:
+        seq = g[b, s:e]
+        if pattern == "steady":  # one channel at -6 per token: every full tile sums to -96
+            seq[:, 0, 7] = -6.0
+        elif pattern == "spike":  # one -200 token per tile on an otherwise mild channel: two decay clusters per tile
+            seq[5::16, 0, 3] = -200.0
+        elif pattern == "two_spikes":  # two -150 tokens inside each tile: three clusters
+            seq[3::16, case.HO - 1, 9] = -150.0
+            seq[11::16, case.HO - 1, 9] = -150.0
+        elif pattern == "offset_window":  # a 40-token run at -6 from offset 5: partial tiles at both ends, one full tile past the edge
+            seq[5:45, 0, 11] = -6.0
+        elif pattern == "extreme":  # an effectively infinite decay and a -50 per-token decay
+            seq[:, 0, 21] = -1.0e4
+            seq[:, case.HO - 1, 33] = -50.0
+        elif pattern == "all_channels":  # every key channel of a head steep at once
+            seq[:, 0, :] = -12.0
+        else:
+            raise ValueError(pattern)
+    return case.clone(gates=dict(case.gates, g=g))
+
+
+STEEP_PATTERNS = ("steady", "spike", "two_spikes", "offset_window", "extreme", "all_channels")
+STEEP_SHAPES = {  # the schedules the engine picks on a 148-SM part: the d_v-split prep path, the uncut prefill, the piece chain
+    "prep": dict(seq_lens=[517, 0, 91, 128, 1]),
+    "uncut": dict(seq_lens=[96, 32, 160, 1]),
+    "chain": dict(seq_lens=[2048]),
+}
+
+
+@pytest.mark.parametrize("shape", list(STEEP_SHAPES))
+@pytest.mark.parametrize("pattern", STEEP_PATTERNS)
+@pytest.mark.parametrize("variant", ("gdn2",))
+def test_fwd_bwd_steep_channel_decay(backend, variant, pattern, shape):
+    """Per-channel log-decay far past the 16-token tile's exp2 range: the forward output and every gradient stay
+    finite and match the fp64 reference (a tile sum of g below -126 * ln 2 = -87.3 used to return NaN for the
+    rest of the sequence)."""
+    case = steep_gate(make_case(variant, torch.bfloat16, **STEEP_SHAPES[shape]), pattern)
+    assert_bwd_parity(backend, case, l2norm=True)
+
+
+@pytest.mark.parametrize("variant", ("gdn2",))
+def test_fwd_steep_channel_decay_initial_state(backend, variant):
+    """The steep path with an initial state, a final state and no in-kernel L2 norm."""
+    case = steep_gate(make_case(variant, torch.bfloat16, seq_lens=[96, 32, 160, 1]), "spike")
+    assert_fwd_parity(backend, case, use_initial_state=True)
+    assert_bwd_parity(backend, case, use_initial_state=True, use_dfs=True)
+
+
+@pytest.mark.parametrize("variant", ("gdn2",))
+def test_steep_channel_decay_beta_guard(backend, variant):
+    """The steep path under the beta guard, whose decay-headroom sensor reads the per-token decay."""
+    case = steep_gate(make_case(variant, torch.bfloat16, T=256), "steady")
+    assert_fwd_parity(backend, case, l2norm=True, beta_guard=True)
+    assert_bwd_parity(backend, case, l2norm=True, beta_guard=True)
+
+
+@pytest.mark.parametrize("shape", list(STEEP_SHAPES))
+@pytest.mark.parametrize("variant", ("gdn2",))
+def test_fwd_bwd_steep_channel_decay_fp16(backend, variant, shape):
+    """fp16 operands overflow much sooner: K inv = k * 2^-g passes the fp16 maximum once a tile's log-decay sums
+    below about -11, which an alpha of 0.3 per token reaches."""
+    case = steep_gate(make_case(variant, torch.float16, lo=0.3, **STEEP_SHAPES[shape]), "steady")
+    assert_bwd_parity(backend, case, l2norm=True)
+
+
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_bwd_with_checkpoints(backend, variant):
     """The checkpoint dump is non-differentiable and must not block backward."""
@@ -4541,6 +4615,45 @@ def test_overwrite_initial_state_bwd_graph_bitwise(backend, variant, schedule):
     for name in names:
         assert_bitwise(f"d{name}[{variant}, {schedule}]", got[name], grads[name])
     assert_bitwise(f"d_initial_state[{variant}, {schedule}]", d_state, grads["initial_state"])
+
+
+@pytest.mark.parametrize("variant", ("gdn2",))
+@pytest.mark.parametrize("backend", ["frost"], indirect=True)
+def test_steep_channel_decay_overwrite_initial_state(backend, variant):
+    """An aliased state (``overwrite_initial_state``) cannot take the exact relaunch, so its kernels compile the steep
+    path inline: output, final state and every gradient bitwise the separate-buffer run's, which takes the relaunch."""
+    case = steep_gate(make_case(variant, torch.bfloat16, B=8, T=512, H=4), "spike")
+    state0, d_final = random_state(case), random_state(case, scale=0.1, seed=SEED + 3)
+    o_ref, fs_ref = run_fwd(backend, case, initial_state=state0.clone(), output_final_state=True, batch_invariant=True)
+    state = state0.clone()
+    o, _ = run_fwd(backend, case, initial_state=state, output_final_state=True, overwrite_initial_state=True)
+    assert torch.isfinite(o).all()
+    assert_bitwise("o", o, o_ref)
+    assert_bitwise("final_state", state, fs_ref)
+
+    _, _, grads, dO, _ = chain_grads(backend, case, initial_state=state0, d_final_state=d_final, batch_invariant=True)
+    names = LEAF_NAMES[variant]
+    inputs = dict(zip(names, op_args(case)[: len(names)]))
+    inputs.update(cu_seqlens=case.cu, dO=dO, initial_state=state0, d_final_state=d_final)
+    graph = cudnn.pygraph()
+    ports = {name: graph.tensor(list(t.shape), data_type=CUDNN_DTYPE[t.dtype], name=name) for name, t in inputs.items()}
+    outs = getattr(graph, f"{variant}_bwd")(**ports, scale=1.0 / math.sqrt(case.K), overwrite_initial_state=True, batch_invariant=True, name="bwd")
+    out_ports = dict(zip(list(names) + ["initial_state"], outs))
+    for name, port in out_ports.items():
+        port.set_output(True).set_data_type(CUDNN_DTYPE[grads[name].dtype])
+    build_and_pin(graph, f"{variant}_frost")
+    d_state = d_final.clone()
+    got = {name: torch.empty_like(grads[name]) for name in names}
+    pack = {ports[name]: t for name, t in inputs.items()}
+    pack[ports["d_final_state"]] = d_state
+    pack.update({out_ports[name]: got[name] for name in names})
+    pack[out_ports["initial_state"]] = d_state
+    graph.execute(pack, torch.empty(max(graph.get_workspace_size(), 1), dtype=torch.uint8, device="cuda"))
+    torch.cuda.synchronize()
+    for name in names:
+        assert torch.isfinite(got[name]).all(), name
+        assert_bitwise(f"d{name}", got[name], grads[name])
+    assert_bitwise("d_initial_state", d_state, grads["initial_state"])
 
 
 def state_pool(case, packed, spare_rows=5, fill=3.14159, padded=False):

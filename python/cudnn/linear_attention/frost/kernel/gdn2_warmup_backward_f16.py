@@ -32,6 +32,7 @@ from cutlass.cute.runtime import from_dlpack
 
 from ..common import split_k
 from ..common.host import get_dtype
+from ..common.steep_decay import STEEP_FAST, STEEP_INLINE
 from . import gdn2_bprop_f16, gdn2_recompute_f16, gdn2_summary_f16
 
 warmup_backward_cache = {}
@@ -343,6 +344,8 @@ def build_warmup_backward(
     recompute_order_gen = not (recompute_orders and split)
     bwd_staging = bwd_orders and split
     bwd_order_gen = not (bwd_orders and split)
+    # d_initial_state written over d_final_state cannot be relaunched: the bprop compiles the steep path inline
+    aliased = dstate0 is not None and dstate_in is not None and dstate0.data_ptr() == dstate_in.data_ptr()
     key = (
         str(q.dtype),
         str(cu_seqlens.dtype),
@@ -373,6 +376,7 @@ def build_warmup_backward(
         bool(use_beta_sigmoid),
         bool(allow_neg_eigval),
         bool(beta_guard),
+        aliased,
     )
     if key not in warmup_backward_cache:
         flags = dict(
@@ -406,6 +410,7 @@ def build_warmup_backward(
             use_dstate0=dstate0 is not None,
             use_initial_state=use_initial_state,
             d_v=DV,
+            steep_mode=STEEP_INLINE if aliased else STEEP_FAST,
             **flags,
         )
         gate_table_placeholder = None

@@ -543,3 +543,22 @@ The `cutedsl-kernel-integration` skill (`skills/cutedsl-kernel-integration/`) do
 - Formatting: black, line length 160.
 
 CUDA-owning objects, GC-timed release and stream capture: Rule 8.
+
+## Linear-attention decay factorisation range
+
+A chunk kernel that splits a decay `2^(g[t] - g[s])` into `exp2(+g[t])` on one MMA
+operand and `rcp(exp2(g[s]))` on the other is exact only while each factor stays
+in the operand's range. With fp32 math and bf16 operands, the edge is an in-tile
+log2 prefix of -126: `exp2` goes subnormal, `rcp(..., ftz=True)` returns inf, and
+`0 * inf` is NaN. With fp16 operands, `k * 2^-g` overflows near -16. Both edges
+lie inside the documented gate range, `alpha = exp(g)` in (0, 1].
+
+The GDN-2 kernels route those tiles through `linear_attention/frost/common/steep_decay.py`,
+which evaluates every exponent at `g[t] - g[s] <= 0`. A new kernel with this split
+must do the same; a test that draws `alpha` from `uniform(0.5, 1)` will not catch the edge.
+Keep that path out of the fast kernel: compiled in, even behind a branch never taken, it
+cost the backward 13% on a 163840-token varlen batch. The kernels vote in the fast launch
+and an exact twin, launched after it, exits on entry unless the vote fired (no host sync).
+
+Detector: `linear_attention/test_la.py::test_fwd_bwd_steep_channel_decay` (and its
+fp16 twin) pushes one key channel past the edge on every schedule.

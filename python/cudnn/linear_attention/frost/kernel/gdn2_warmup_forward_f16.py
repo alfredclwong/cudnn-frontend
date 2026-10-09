@@ -33,6 +33,7 @@ from cutlass.cute.runtime import from_dlpack
 
 from ..common import split_k
 from ..common.host import get_dtype
+from ..common.steep_decay import STEEP_FAST, STEEP_INLINE
 from . import gdn2_prefill_f16, gdn2_prep_f16, gdn2_prep_prefill_f16
 
 warmup_forward_cache = {}
@@ -189,6 +190,7 @@ def warmup_forward_host(
             prep_diag,
             prep_rows,
             prep_row_count,
+            scheduler,
             stream,
         )
     else:
@@ -318,6 +320,8 @@ def build_warmup_forward(
     io_dtype = get_dtype(q.dtype)
     gate_dtype = get_dtype(gate.dtype)
     state_src = state_in if state_in is not None else state_out
+    # a final state written over the initial state cannot be relaunched: the prefill compiles the steep path inline
+    aliased = state_in is not None and state_out is not None and state_in.data_ptr() == state_out.data_ptr()
     state_dtype = get_dtype(state_src.dtype) if state_src is not None else cutlass.Float32
     key = (
         str(q.dtype),
@@ -349,6 +353,7 @@ def build_warmup_forward(
         int(checkpoint_every_n_tokens) > 0,
         int(tiles_per_head),
         bool(prep),
+        aliased,
     )
     if key not in warmup_forward_cache:
         prefill_module = gdn2_prep_prefill_f16 if prep else gdn2_prefill_f16
@@ -370,6 +375,7 @@ def build_warmup_forward(
             d_k=DK,
             d_v=DV // tiles_per_head,
             tiles_per_head=tiles_per_head,
+            **({} if prep else {"steep_mode": STEEP_INLINE if aliased else STEEP_FAST}),
         )
         prep_cfg = None
         if prep:

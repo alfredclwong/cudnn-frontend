@@ -25,6 +25,8 @@ import cutlass.experimental.primitives as nvvm
 
 from cudnn.frost.tile_dsl.swizzle import swizzle_xor_128b
 
+from .steep_decay import steep_decode
+
 GUARD_MARGIN = 1.0 / 32
 GUARD_QUANT_TOL_MULT = 4.0
 MACHINE_EPSILON_FP16 = 2.0**-10
@@ -40,8 +42,14 @@ def beta_guard(
     gate_prefix_ptr,
     decay_row: cutlass.Int32,
     lane_in_row_group: cutlass.Int32,
+    steep_bits=None,
+    log_last_ptr=None,
 ) -> None:
-    """Rewrite the dk_halves * 8 per-lane beta registers to beta_eff in place."""
+    """Rewrite the dk_halves * 8 per-lane beta registers to beta_eff in place.
+
+    In a tile with steep channels (``common/steep_decay.py``) the caller passes the lane's ``steep_bits`` and the
+    per-channel last-row log2 prefixes: those channels' gate-exchange rows may hold log2 prefixes
+    (:func:`steep_decode`), and their per-token decay is ``exp2`` of the prefix difference."""
     dk_halves = cfg.d_k // 64
     zero = cutlass.Float32(0.0)
     one = cutlass.Float32(1.0)
@@ -66,6 +74,15 @@ def beta_guard(
                 if decay_row == 0:
                     prev_val = one
                 ratio = exp_g_frag[elem] * cute.math.rcp(prev_val, approx=True, ftz=True)
+                if cutlass.const_expr(steep_bits is not None):
+                    if ((steep_bits >> (dim_half * 8 + f32_group * 4 + elem)) & 1) != 0:
+                        log_row = (log_last_ptr + f32_dim_base + elem).load()
+                        if decay_row < cfg.b_t - 1:
+                            log_row, _ = steep_decode(exp_g_frag[elem])
+                        log_prev = zero
+                        if decay_row > 0:
+                            log_prev, _ = steep_decode(exp_g_prev_frag[elem])
+                        ratio = cute.math.exp2(log_row - log_prev, fastmath=True)
                 max_ratio = cute.math.max(max_ratio, ratio)
     max_ratio = cute.math.max(max_ratio, cutlass.Float32(nvvm.shfl_sync(0xFFFFFFFF, max_ratio, 4, 31, kind=nvvm.Shfl.BFLY)))
     max_ratio = cute.math.max(max_ratio, cutlass.Float32(nvvm.shfl_sync(0xFFFFFFFF, max_ratio, 2, 31, kind=nvvm.Shfl.BFLY)))
