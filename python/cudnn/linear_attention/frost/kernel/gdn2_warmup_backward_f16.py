@@ -309,6 +309,7 @@ def build_warmup_backward(
     scale,
     device,
     stream,
+    overwrite_initial_state=False,
 ):
     """Compile (cached per static config) the warmup or uncut backward launch over the buffers of one plan.  The
     placeholders repeat the marks of the standalone builds so every kernel compiles as it does there; the recompute and
@@ -344,8 +345,8 @@ def build_warmup_backward(
     recompute_order_gen = not (recompute_orders and split)
     bwd_staging = bwd_orders and split
     bwd_order_gen = not (bwd_orders and split)
-    # d_initial_state written over d_final_state cannot be relaunched: the bprop compiles the steep path inline
-    aliased = dstate0 is not None and dstate_in is not None and dstate0.data_ptr() == dstate_in.data_ptr()
+    # The graph may rebind separate state buffers to one buffer after warmup.
+    aliased = overwrite_initial_state
     key = (
         str(q.dtype),
         str(cu_seqlens.dtype),

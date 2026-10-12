@@ -292,6 +292,7 @@ def build_warmup_forward(
     prep_words=None,
     prep_rows=None,
     prep_row_count=None,
+    overwrite_initial_state=False,
 ):
     """Compile (cached per static config: dtypes, heads, dims, gate flags and bound, the split-K geometry, the d_v split, state and
     checkpoint presence, device) the warmup or uncut forward launch over the buffers of one plan.  The placeholders repeat
@@ -320,8 +321,8 @@ def build_warmup_forward(
     io_dtype = get_dtype(q.dtype)
     gate_dtype = get_dtype(gate.dtype)
     state_src = state_in if state_in is not None else state_out
-    # a final state written over the initial state cannot be relaunched: the prefill compiles the steep path inline
-    aliased = state_in is not None and state_out is not None and state_in.data_ptr() == state_out.data_ptr()
+    # Bind replay safety to the graph contract, which survives buffer rebinding.
+    aliased = overwrite_initial_state or seed_indices is not None
     state_dtype = get_dtype(state_src.dtype) if state_src is not None else cutlass.Float32
     key = (
         str(q.dtype),

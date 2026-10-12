@@ -92,14 +92,13 @@ from ..common.blockwise_inverse import invert_unit_lower_16x16_fragments
 from ..common.steep_decay import (
     STEEP_FAST,
     add_steep_corrections,
+    channel_needs_exact_decay,
     lane_steep_bits,
     steep_exact_cfg,
     steep_exit_unless_flagged,
-    steep_log2_prefix,
     steep_raise_flag,
     steep_row_corrections,
-    steep_stage,
-    steep_store_operands,
+    row_operand_scales,
     steep_ticket,
     store_steep_beta,
 )
@@ -1166,6 +1165,10 @@ def compute0_warp_group(
                 for row in cutlass.range_constexpr(cfg.b_t):
                     g_prefix_regs[row] = cutlass.Float32(0.0) if chunk_start + cutlass.Int32(row) >= batch_seqlen else g_prefix_regs[row]
 
+            if cutlass.const_expr(cfg.steep_mode != STEEP_FAST):
+                for row in cutlass.range_constexpr(cfg.b_t):
+                    gate_raw[row] = g_prefix_regs[row]
+
             prefix_acc = cutlass.Float32(0.0)
             for row_pair in cutlass.range_constexpr(cfg.b_t // 2):
                 row0 = row_pair * 2
@@ -1180,8 +1183,7 @@ def compute0_warp_group(
 
             # ---- steep channels: an in-tile log2 prefix below the steep threshold (a gate in (0, 1] never raises the
             # prefix, so the last row holds its minimum) ----
-            steep_threshold = cutlass.Float32(steep_log2_prefix(cfg.io_dtype))
-            channel_steep = g_prefix_regs[cfg.b_t - 1] < steep_threshold
+            channel_steep = channel_needs_exact_decay(cfg, g_prefix_regs[cfg.b_t - 1], sK_ptr, channel_dim)
             steep_word = cutlass.Int32(nvvm.vote_sync(0xFFFFFFFF, channel_steep, nvvm.VoteSync.BALLOT))
             if cutlass.const_expr(channel_rows < cfg.threads_per_warp):
                 steep_word = steep_word & cutlass.Int32((1 << channel_rows) - 1)
@@ -1193,15 +1195,15 @@ def compute0_warp_group(
                     (steep_scan_ptr + cg0_local_warp).store(steep_word)
                 if steep_word != 0:
                     if channel_steep:
-                        (steep_last_ptr + channel_dim).store(g_prefix_regs[cfg.b_t - 1])
+                        (steep_last_ptr + channel_dim).store(gate_raw[cfg.b_t - 1])
 
             # ---- exp2(g): stage prefixes + final-token decay -------------------------
-            # (rows 0 .. BT-2 stage a prefix below the steep threshold as the prefix itself: common/steep_decay.py)
+            # (steep rows 0 .. BT-2 retain token logs; the last row retains state decay)
             for row in cutlass.range_constexpr(cfg.b_t):
-                if cutlass.const_expr(row < cfg.b_t - 1):
-                    g_prefix_regs[row] = steep_stage(cfg, g_prefix_regs[row], cute.math.exp2(g_prefix_regs[row], fastmath=True), steep_threshold)
-                else:
-                    g_prefix_regs[row] = cute.math.exp2(g_prefix_regs[row], fastmath=True)
+                g_prefix_regs[row] = cute.math.exp2(g_prefix_regs[row], fastmath=True)
+                if cutlass.const_expr(cfg.steep_mode != STEEP_FAST and row < cfg.b_t - 1):
+                    if channel_steep:
+                        g_prefix_regs[row] = gate_raw[row]
             for row_off in cutlass.range_constexpr(store_rows):
                 if cutlass.const_expr(channel_rows < cfg.threads_per_warp):
                     row = store_row_base + cutlass.Int32(row_off)
@@ -1281,20 +1283,17 @@ def compute0_warp_group(
 
             # ---- Beta guard ----------------------------------------------------------
             if cutlass.const_expr(cfg.beta_guard):
-                if steep_any != 0:
-                    beta_guard(
-                        cfg,
-                        raw_beta_regs,
-                        raw_k_regs,
-                        k_inv_norm,
-                        sGate_exchange_ptr,
-                        decay_row,
-                        lane_in_row_group,
-                        steep_bits=steep_bits,
-                        log_last_ptr=steep_last_ptr,
-                    )
-                else:
-                    beta_guard(cfg, raw_beta_regs, raw_k_regs, k_inv_norm, sGate_exchange_ptr, decay_row, lane_in_row_group)
+                beta_guard(
+                    cfg,
+                    raw_beta_regs,
+                    raw_k_regs,
+                    k_inv_norm,
+                    sGate_exchange_ptr,
+                    decay_row,
+                    lane_in_row_group,
+                    steep_bits=steep_bits if cutlass.const_expr(cfg.steep_mode != STEEP_FAST) else None,
+                    log_last_ptr=steep_last_ptr,
+                )
 
             # ---- decay/restore operands: exp2(+-g) applied per key channel -----------
             exp_g_regs = cutlass.Array(cutlass.Float32, dk_halves * 8, alignment=16)
@@ -1317,18 +1316,21 @@ def compute0_warp_group(
                     exp_g_last_frag = (sGate_exchange_ptr + exp_g_last_idx).load(count=4, alignment=16)
                     half_reg_base = f32_group * 4
                     f32_reg_base = reg_base + half_reg_base
-                    exp_g_regs[f32_reg_base] = exp_g_frag[0]
-                    exp_g_regs[f32_reg_base + 1] = exp_g_frag[1]
-                    exp_g_regs[f32_reg_base + 2] = exp_g_frag[2]
-                    exp_g_regs[f32_reg_base + 3] = exp_g_frag[3]
-                    exp_neg_g_regs[half_reg_base] = cute.math.rcp(exp_g_frag[0], approx=True, ftz=True)
-                    exp_neg_g_regs[half_reg_base + 1] = cute.math.rcp(exp_g_frag[1], approx=True, ftz=True)
-                    exp_neg_g_regs[half_reg_base + 2] = cute.math.rcp(exp_g_frag[2], approx=True, ftz=True)
-                    exp_neg_g_regs[half_reg_base + 3] = cute.math.rcp(exp_g_frag[3], approx=True, ftz=True)
-                    exp_g_last_regs[f32_reg_base] = exp_g_last_frag[0]
-                    exp_g_last_regs[f32_reg_base + 1] = exp_g_last_frag[1]
-                    exp_g_last_regs[f32_reg_base + 2] = exp_g_last_frag[2]
-                    exp_g_last_regs[f32_reg_base + 3] = exp_g_last_frag[3]
+                    for elem in cutlass.range_constexpr(4):
+                        decay, inverse, restore = row_operand_scales(
+                            cfg,
+                            steep_bits,
+                            f32_reg_base + elem,
+                            decay_row,
+                            f32_dim_base + elem,
+                            exp_g_frag[elem],
+                            exp_g_last_frag[elem],
+                            sGate_exchange_ptr,
+                            steep_last_ptr,
+                        )
+                        exp_g_regs[f32_reg_base + elem] = decay
+                        exp_neg_g_regs[half_reg_base + elem] = inverse
+                        exp_g_last_regs[f32_reg_base + elem] = restore
 
                 # ---- K decay + K inv + K restore operands: Beta * K * exp2(+g), K * exp2(-g), K * exp2(g last - g) ----
                 k_decay_pack = cutlass.Array(cutlass.Int32, 4, alignment=16)
@@ -1430,28 +1432,11 @@ def compute0_warp_group(
                     cutlass.Int32,
                 ).bitcast(cfg.io_dtype)
                 (sK_restore_ptr + k_restore_idx).store(k_restore_vec, alignment=16)
-            # ---- steep key channels (common/steep_decay.py): rebuild their operand entries, exact KK / A corrections;
+            # ---- steep key channels (common/steep_decay.py): compute exact KK / A corrections;
             # a steep tile publishes its K operands here instead of above ----
             if steep_any != 0:
                 if cutlass.const_expr(cfg.beta_guard):
                     store_steep_beta(cfg, steep_bits, raw_beta_regs, sBeta_ptr, decay_row, lane_in_row_group)
-                steep_store_operands(
-                    cfg,
-                    steep_bits,
-                    decay_row,
-                    lane_in_row_group,
-                    k_inv_norm,
-                    q_inv_norm,
-                    sGate_exchange_ptr,
-                    steep_last_ptr,
-                    sK_ptr,
-                    sQ_ptr,
-                    sBeta_ptr,
-                    sK_inv_ptr,
-                    sK_decay_ptr,
-                    sQ_decay_ptr,
-                    sK_restore_ptr,
-                )
                 nvvm.barrier_cta_sync(cfg.cg0_group_sync_barrier_base_id + cg0_group_id, thread_count=cfg.cg0_threads_per_group)
                 steep_norm_ptr = None
                 if cutlass.const_expr(cfg.l2norm):
@@ -1469,6 +1454,9 @@ def compute0_warp_group(
                     sQ_ptr,
                     sBeta_ptr,
                     steep_norm_ptr,
+                    sK_inv_ptr,
+                    sK_decay_ptr,
+                    sQ_decay_ptr,
                     sSteepCorr.data_ptr() + decay_stage * (2 * cfg.b_t * cfg.b_t),
                 )
                 nvvm.fence_proxy("async.shared", space="cta")
@@ -2790,7 +2778,7 @@ def frost_gdn2_prefill(
     bars = make_bars(cfg)
     sTmem_base = cutlass.Array(cutlass.Int32, 1, space=SMEM, alignment=4)
     sScheduler = cutlass.Array(cutlass.Int32, cfg.scheduler_stages, space=SMEM, alignment=16)
-    # steep key channels (common/steep_decay.py): per CG0 group the scan's ballot words, last-row log2 prefixes and
+    # steep key channels (common/steep_decay.py): per CG0 group the scan's ballot words, last-token log2 gates and
     # k inverse norms; per decay stage the tile's ballot words and the KK / A corrections
     sSteepScan = cutlass.Array(cutlass.Int32, cfg.cg0_group_count * cfg.cg0_warps_per_group, space=SMEM, alignment=16)
     sSteepLast = cutlass.Array(cutlass.Float32, cfg.cg0_group_count * cfg.d_k, space=SMEM, alignment=16)

@@ -353,6 +353,7 @@ class CompiledGdn2:
             self.warmup_launch = self.build_warmup_forward(
                 **buffers,
                 split=self.split,
+                overwrite_initial_state=self.overwrite_initial_state,
                 tiles_per_head=self.tiles_per_head,
                 prep=self.prep,
                 n_tiles=self.n_tiles,
@@ -768,6 +769,7 @@ class CompiledGdn2Bwd:
             if self.warmup_launch is None:
                 self.warmup_launch = self.build_warmup_backward(
                     **buffers,
+                    overwrite_initial_state=self.overwrite_initial_state,
                     **schedule,
                     use_initial_state=state0 is not None,
                     split=self.split,

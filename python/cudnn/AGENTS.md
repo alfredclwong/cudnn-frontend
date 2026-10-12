@@ -560,5 +560,23 @@ Keep that path out of the fast kernel: compiled in, even behind a branch never t
 cost the backward 13% on a 163840-token varlen batch. The kernels vote in the fast launch
 and an exact twin, launched after it, exits on entry unless the vote fired (no host sync).
 
-Detector: `linear_attention/test_la.py::test_fwd_bwd_steep_channel_decay` (and its
+Detector: `linear_attention/test_gdn2_steep_decay.py::test_fwd_bwd_steep_channel_decay` (and its
 fp16 twin) pushes one key channel past the edge on every schedule.
+
+Replay safety belongs to the graph contract, not the first execution's pointer
+values: an overwrite-capable graph can bind separate state buffers on warmup
+and alias them later. Keep its exact path inline for the plan's lifetime.
+`test_forward_state_alias_after_graph_warmup` and
+`test_steep_channel_decay_overwrite_initial_state` exercise both directions.
+
+A gate-prefix cutoff alone does not bound an unnormalized inverse operand.
+Include the key magnitude in the range decision; `k=5` already overflows fp16
+at a log2 prefix of -13.75. Correction reductions must use a fixed order,
+including when several channels are steep. The detectors are
+`test_fp16_inverse_range_without_normalization` and
+`test_multiple_steep_channels_are_repeatable` in the same test module.
+
+Do not obtain steep-channel interval decay by subtracting inclusive fp32
+prefixes: a -1e8 gate can erase following -1 gates from both prefixes. Retain
+individual conditioned log gates and sum only the interval. The `huge_spike`
+pattern covers this in forward, backward, and the beta guard.
