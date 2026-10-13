@@ -66,7 +66,7 @@ import cutlass.cute as cute
 import cutlass.experimental.primitives as nvvm
 
 from cudnn.frost.tile_dsl.barrier import launch_dependent_grids
-from cudnn.frost.tile_dsl.pointwise import sigmoid
+from cudnn.frost.tile_dsl.pointwise import sigmoid, fp32_to_fp16
 from cudnn.frost.tile_dsl.swizzle import swizzle_xor_128b
 
 STEEP_LOG2_PREFIX: float = -120.0
@@ -100,9 +100,9 @@ prologue zeroes with the first: 0 means no steep tile, and the exact launch's ti
 stored."""
 
 
-def steep_exact_cfg(cfg):
-    """The ``STEEP_EXACT`` twin of a ``STEEP_FAST`` kernel config (a trace-time copy)."""
-    return dataclasses.replace(cfg, steep_mode=STEEP_EXACT)
+def steep_launch_cfg(cfg, launch_idx):
+    """Compile-time launch order: the requested specialization, then its exact twin."""
+    return cfg if launch_idx == 0 else dataclasses.replace(cfg, steep_mode=STEEP_EXACT)
 
 
 @cute.jit
@@ -166,6 +166,29 @@ def channel_needs_exact_decay(cfg: cutlass.Constexpr, prefix, raw_k_ptr, channel
         limit = cutlass.Float32(15.0 if cfg.io_dtype == cutlass.Float16 else 127.0)
         threshold = cute.math.max(threshold, cute.math.log2(max_key) - limit)
     return prefix < threshold
+
+
+@cute.jit
+def classify_steep_channel(cfg: cutlass.Constexpr, prefix, raw_k_ptr, channel, channel_rows: cutlass.Constexpr, flag_slot, lane_idx):
+    """Classify a scan lane, mask duplicate lanes, and flag a FAST relaunch.
+
+    Callers retain ownership of stage offsets, scratch stores and barriers.
+    """
+    channel_steep = channel_needs_exact_decay(cfg, prefix, raw_k_ptr, channel)
+    word = cutlass.Int32(nvvm.vote_sync(0xFFFFFFFF, channel_steep, nvvm.VoteSync.BALLOT))
+    if cutlass.const_expr(channel_rows < cfg.threads_per_warp):
+        word = word & cutlass.Int32((1 << channel_rows) - 1)
+    steep_raise_flag(cfg, flag_slot, word, lane_idx)
+    return channel_steep, word
+
+
+@cute.jit
+def steep_tile_mask(cfg: cutlass.Constexpr, words_ptr):
+    """Read the tile's four scan-warp ballots; FAST never reads exact-path scratch."""
+    mask = cutlass.Int32(0)
+    if cutlass.const_expr(cfg.steep_mode != STEEP_FAST):
+        mask = (words_ptr.load() | (words_ptr + 1).load()) | ((words_ptr + 2).load() | (words_ptr + 3).load())
+    return mask
 
 
 @cute.jit
@@ -380,3 +403,36 @@ def store_steep_beta(cfg: cutlass.Constexpr, bits, beta_regs, beta_ptr, row, lan
         if ((bits >> reg_idx) & 1) != 0:
             channel = (reg_idx // 8) * 64 + lane_in_row_group * 8 + reg_idx % 8
             (beta_ptr + raw_offset(cfg, row, channel)).store(beta_regs[reg_idx].to(cfg.io_dtype))
+
+
+@cute.jit
+def restore_steep_dstate(cfg: cutlass.Constexpr, row_lo_addr, acc_col, input_col, first_channel, words_ptr, scale_ptr):
+    """Store backward carry with steep channels undecayed: K inv already carries their decay.
+
+    Both backward schedules call after publishing the ordinary decayed operand.
+    Keep the accumulator read, conversion and store order identical in each.
+    """
+    steep_rows = cutlass.const_expr(cfg.d_k // len(cfg.compute_group_0_warp_ids))
+    for half in cutlass.range_constexpr(2):
+        steep_vec = nvvm.tcgen05_ld(
+            "32x32b",
+            nvvm.make_tmem_ptr(row_lo_addr + (acc_col + half * 16), cutlass.Float32),
+            num=16,
+        )
+        nvvm.tcgen05_wait("load")
+        steep_pack = cutlass.Array(cutlass.Int32, 8, alignment=16)
+        for pc in cutlass.range_constexpr(8):
+            col0 = first_channel + half * 16 + 2 * pc
+            value0 = steep_vec[2 * pc]
+            value1 = steep_vec[2 * pc + 1]
+            if (((words_ptr + col0 // steep_rows).load() >> (col0 % steep_rows)) & 1) == 0:
+                value0 = value0 * (scale_ptr + col0).load()
+            if (((words_ptr + (col0 + 1) // steep_rows).load() >> ((col0 + 1) % steep_rows)) & 1) == 0:
+                value1 = value1 * (scale_ptr + col0 + 1).load()
+            steep_pack[pc] = fp32_to_fp16(value0, value1, dtype=cfg.io_dtype)
+        nvvm.tcgen05_wait("store")
+        nvvm.tcgen05_st(
+            "32x32b",
+            nvvm.make_tmem_ptr(row_lo_addr + (input_col + half * 8), cutlass.Int8),
+            steep_pack[0:8],
+        )

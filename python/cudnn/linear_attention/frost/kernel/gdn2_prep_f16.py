@@ -70,11 +70,11 @@ from ..common.blockwise_inverse import invert_unit_lower_16x16_fragments
 from ..common.steep_decay import (
     STEEP_FAST,
     add_steep_corrections,
-    channel_needs_exact_decay,
+    classify_steep_channel,
     lane_steep_bits,
-    steep_exact_cfg,
+    steep_launch_cfg,
+    steep_tile_mask,
     steep_exit_unless_flagged,
-    steep_raise_flag,
     steep_row_corrections,
     row_operand_scales,
     store_steep_beta,
@@ -350,13 +350,9 @@ def compute_warp_group(
 
         # ---- steep channels: an in-tile log2 prefix below the steep threshold (a gate in (0, 1] never raises the
         # prefix, so the last row holds its minimum) ----
-        channel_steep = channel_needs_exact_decay(cfg, g_prefix_regs[cfg.b_t - 1], sK_ptr, channel_dim)
-        steep_word = cutlass.Int32(nvvm.vote_sync(0xFFFFFFFF, channel_steep, nvvm.VoteSync.BALLOT))
-        if cutlass.const_expr(channel_rows < cfg.threads_per_warp):
-            steep_word = steep_word & cutlass.Int32((1 << channel_rows) - 1)
         steep_scan_ptr = sSteepScan.data_ptr()
         steep_last_ptr = sSteepLast.data_ptr()
-        steep_raise_flag(cfg, mSteepSlot, steep_word, lane_idx)
+        channel_steep, steep_word = classify_steep_channel(cfg, prefix_acc, sK_ptr, channel_dim, channel_rows, mSteepSlot, lane_idx)
         if cutlass.const_expr(cfg.steep_mode != STEEP_FAST):
             if lane_idx == 0:
                 (steep_scan_ptr + warp_local).store(steep_word)
@@ -384,9 +380,7 @@ def compute_warp_group(
             if lane_idx == 0:
                 tma_store_wait(RECS - 1)
         nvvm.barrier_cta_sync(barrier_id, thread_count=cfg.threads_per_cta)
-        steep_any = cutlass.Int32(0)
-        if cutlass.const_expr(cfg.steep_mode != STEEP_FAST):
-            steep_any = (steep_scan_ptr.load() | (steep_scan_ptr + 1).load()) | ((steep_scan_ptr + 2).load() | (steep_scan_ptr + 3).load())
+        steep_any = steep_tile_mask(cfg, steep_scan_ptr)
         steep_bits = cutlass.Int32(0)
         if steep_any != 0:
             steep_bits = lane_steep_bits(cfg, steep_scan_ptr, lane_in_row_group, channel_rows)
@@ -972,31 +966,9 @@ def host(
     cfg.tma_beta_bytes = cfg.d_k * cfg.b_t * bytes_per_element
 
     # ---- launch ----------------------------------------------------------------------
-    frost_gdn2_prep(
-        cfg,
-        cute.FastDivmodDivisorV2(heads_out),
-        q_ratio,
-        k_ratio,
-        cute.FastDivmodDivisorV2(num_ctas),
-        desc_words,
-        a_log,
-        dt_bias,
-        rows,
-        row_count,
-        a,
-        diag,
-        cutlass.Int32(cu_seqlens.shape[0] - 1),
-        steep_slot,
-    ).launch(
-        grid=(num_ctas, 1, 1),
-        block=(cfg.threads_per_cta, 1, 1),
-        stream=stream,
-        use_pdl=USE_PDL,
-        min_blocks_per_mp=cfg.ctas_per_sm,
-    )
-    if cutlass.const_expr(cfg.steep_mode == STEEP_FAST):
+    for launch_idx in cutlass.range_constexpr(2 if cfg.steep_mode == STEEP_FAST else 1):
         frost_gdn2_prep(
-            steep_exact_cfg(cfg),
+            steep_launch_cfg(cfg, launch_idx),
             cute.FastDivmodDivisorV2(heads_out),
             q_ratio,
             k_ratio,

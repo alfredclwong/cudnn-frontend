@@ -92,14 +92,14 @@ from ..common.steep_decay import (
     STEEP_FAST,
     STEEP_INLINE,
     add_steep_corrections,
-    channel_needs_exact_decay,
+    classify_steep_channel,
     lane_steep_bits,
-    steep_exact_cfg,
+    steep_launch_cfg,
     steep_exit_unless_flagged,
-    steep_raise_flag,
     steep_row_corrections,
     row_operand_scales,
     steep_ticket,
+    steep_tile_mask,
     store_steep_beta,
 )
 from ..common.thd import TENSOR_MAP_QWORDS, emit_seq_descs
@@ -318,9 +318,7 @@ def register_mma_warp(
 
             bars.mb_k_decay_inv_cg0_ready[decay_stage].wait(cutlass.Int32((chunk_count // cfg.smem_decay_stages) % 2))
             steep_tile_ptr = sSteepTile.data_ptr() + decay_stage * cfg.cg0_warps_per_group
-            steep_tile = cutlass.Int32(0)
-            if cutlass.const_expr(cfg.steep_mode != STEEP_FAST):
-                steep_tile = (steep_tile_ptr.load() | (steep_tile_ptr + 1).load()) | ((steep_tile_ptr + 2).load() | (steep_tile_ptr + 3).load())
+            steep_tile = steep_tile_mask(cfg, steep_tile_ptr)
 
             # ---- KK = K decay @ K inv^T ----------------------------------------------
             kk_acc = cutlass.Array(cutlass.Float32, 8, alignment=16)
@@ -946,13 +944,9 @@ def compute0_warp_group(
 
             # ---- steep channels: an in-tile log2 prefix below the steep threshold (a gate in (0, 1] never raises the
             # prefix, so the last row holds its minimum) ----
-            channel_steep = channel_needs_exact_decay(cfg, g_prefix_regs[cfg.b_t - 1], sK_ptr, channel_dim)
-            steep_word = cutlass.Int32(nvvm.vote_sync(0xFFFFFFFF, channel_steep, nvvm.VoteSync.BALLOT))
-            if cutlass.const_expr(channel_rows < cfg.threads_per_warp):
-                steep_word = steep_word & cutlass.Int32((1 << channel_rows) - 1)
             steep_scan_ptr = sSteepScan.data_ptr() + cg0_group_id * cfg.cg0_warps_per_group
             steep_last_ptr = sSteepLast.data_ptr() + cg0_group_id * cfg.d_k
-            steep_raise_flag(cfg, mSteepSlot, steep_word, lane_idx)
+            channel_steep, steep_word = classify_steep_channel(cfg, prefix_acc, sK_ptr, channel_dim, channel_rows, mSteepSlot, lane_idx)
             if cutlass.const_expr(cfg.steep_mode != STEEP_FAST):
                 if lane_idx == 0:
                     (steep_scan_ptr + cg0_local_warp).store(steep_word)
@@ -979,9 +973,7 @@ def compute0_warp_group(
             nvvm.barrier_cta_sync(cfg.cg0_group_sync_barrier_base_id + cg0_group_id, thread_count=cfg.cg0_threads_per_group)
             if nvvm.elect_sync():
                 bars.mb_gate_exchange_ready[raw_stage].arrive()
-            steep_any = cutlass.Int32(0)
-            if cutlass.const_expr(cfg.steep_mode != STEEP_FAST):
-                steep_any = (steep_scan_ptr.load() | (steep_scan_ptr + 1).load()) | ((steep_scan_ptr + 2).load() | (steep_scan_ptr + 3).load())
+            steep_any = steep_tile_mask(cfg, steep_scan_ptr)
             steep_bits = cutlass.Int32(0)
             if steep_any != 0:
                 steep_bits = lane_steep_bits(cfg, steep_scan_ptr, lane_in_row_group, channel_rows)
@@ -2171,36 +2163,9 @@ def host(
 
     # ---- launch ----------------------------------------------------------------------
     grid_shape = (cfg.max_active_clusters, 1, 1)
-    frost_gdn2_summary(
-        cfg,
-        k_ratio,
-        v_ratio,
-        tensormap_workspace,
-        cutlass.Int32(num_sequences),
-        k,
-        v,
-        raw_gate,
-        a_log,
-        dt_bias,
-        beta,
-        w,
-        cu_seqlens,
-        initial_state,
-        final_state,
-        transition,
-        work_items,
-        work_count,
-        scheduler_counter,
-    ).launch(
-        grid=grid_shape,
-        block=(cfg.threads_per_cta, 1, 1),
-        stream=stream,
-        use_pdl=USE_PDL,
-        min_blocks_per_mp=1,
-    )
-    if cutlass.const_expr(cfg.steep_mode == STEEP_FAST):
+    for launch_idx in cutlass.range_constexpr(2 if cfg.steep_mode == STEEP_FAST else 1):
         frost_gdn2_summary(
-            steep_exact_cfg(cfg),
+            steep_launch_cfg(cfg, launch_idx),
             k_ratio,
             v_ratio,
             tensormap_workspace,

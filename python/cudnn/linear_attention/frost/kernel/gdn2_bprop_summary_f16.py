@@ -89,14 +89,15 @@ from ..common.steep_decay import (
     STEEP_FAST,
     exchange_offset,
     add_steep_corrections,
-    channel_needs_exact_decay,
+    classify_steep_channel,
     lane_steep_bits,
-    steep_exact_cfg,
+    steep_launch_cfg,
     steep_exit_unless_flagged,
-    steep_raise_flag,
     steep_row_corrections,
     row_operand_scales,
     steep_ticket,
+    restore_steep_dstate,
+    steep_tile_mask,
 )
 from ..common.thd import TENSOR_MAP_QWORDS, emit_seq_descs
 from .gdn2_bprop_config import CFG
@@ -296,9 +297,7 @@ def epilogue_warp(
             bars.mb_a_done[intermediate_stage].wait(((gc // cfg.smem_intermediate_stages) + 1) % 2)
             bars.mb_q_decay_ready[decay_stage].wait((gc // cfg.smem_decay_stages) % 2)
             steep_tile_ptr = sSteepTile_ptr + decay_stage * len(cfg.compute_group_0_warp_ids)
-            steep_tile = cutlass.Int32(0)
-            if cutlass.const_expr(cfg.steep_mode != STEEP_FAST):
-                steep_tile = (steep_tile_ptr.load() | (steep_tile_ptr + 1).load()) | ((steep_tile_ptr + 2).load() | (steep_tile_ptr + 3).load())
+            steep_tile = steep_tile_mask(cfg, steep_tile_ptr)
             a_acc = cutlass.Array(cutlass.Float32, 8, alignment=16)
             for accum_idx in cutlass.range_constexpr(8):
                 a_acc[accum_idx] = cutlass.Float32(0.0)
@@ -415,9 +414,7 @@ def register_mma_warp(
             # ---- KK = K decay @ K inv^T ----------------------------------------------
             bars.mb_k_decay_inv_ready[decay_stage].wait((gc // cfg.smem_decay_stages) % 2)
             steep_tile_ptr = sSteepTile_ptr + decay_stage * len(cfg.compute_group_0_warp_ids)
-            steep_tile = cutlass.Int32(0)
-            if cutlass.const_expr(cfg.steep_mode != STEEP_FAST):
-                steep_tile = (steep_tile_ptr.load() | (steep_tile_ptr + 1).load()) | ((steep_tile_ptr + 2).load() | (steep_tile_ptr + 3).load())
+            steep_tile = steep_tile_mask(cfg, steep_tile_ptr)
             kk_a_row = a_row_coord
             kk_acc = cutlass.Array(cutlass.Float32, 8, alignment=16)
             for accum_idx in cutlass.range_constexpr(8):
@@ -1044,13 +1041,9 @@ def compute0_warp_group(
 
             # ---- steep channels: an in-tile log2 prefix below the steep threshold (a gate in (0, 1] never raises the
             # prefix, so the last row holds its minimum) ----
-            channel_steep = channel_needs_exact_decay(cfg, prefix_acc, sK_ptr, channel_dim)
-            steep_word = cutlass.Int32(nvvm.vote_sync(0xFFFFFFFF, channel_steep, nvvm.VoteSync.BALLOT))
-            if cutlass.const_expr(channel_rows < cfg.threads_per_warp):
-                steep_word = steep_word & cutlass.Int32((1 << channel_rows) - 1)
             steep_scan_ptr = sSteepScan_ptr + raw_stage * len(cfg.compute_group_0_warp_ids)
             steep_last_ptr = sSteepLast_ptr + raw_stage * cfg.d_k
-            steep_raise_flag(cfg, mSteepSlot, steep_word, lane_idx)
+            channel_steep, steep_word = classify_steep_channel(cfg, prefix_acc, sK_ptr, channel_dim, channel_rows, mSteepSlot, lane_idx)
             if cutlass.const_expr(cfg.steep_mode != STEEP_FAST):
                 if lane_idx == 0:
                     (steep_scan_ptr + cg0_warp).store(steep_word)
@@ -1080,9 +1073,7 @@ def compute0_warp_group(
             bars.mb_decay_scale_ready[decay_stage].arrive()
 
             nvvm.barrier_cta_sync(cfg.cg0_sync_barrier_id, thread_count=cfg.cg0_threads)
-            steep_any = cutlass.Int32(0)
-            if cutlass.const_expr(cfg.steep_mode != STEEP_FAST):
-                steep_any = (steep_scan_ptr.load() | (steep_scan_ptr + 1).load()) | ((steep_scan_ptr + 2).load() | (steep_scan_ptr + 3).load())
+            steep_any = steep_tile_mask(cfg, steep_scan_ptr)
             steep_bits = cutlass.Int32(0)
             if steep_any != 0:
                 steep_bits = lane_steep_bits(cfg, steep_scan_ptr, lane_in_row_group, channel_rows)
@@ -1384,9 +1375,7 @@ def compute1_warp_group(
                 bars.mb_decay_scale_ready[seed_stage].wait(seed_phase)
                 seed_scale_ptr = sDecay_scale_raw.data_ptr() + seed_stage * cfg.d_k
                 seed_steep_ptr = sSteepTile_ptr + seed_stage * len(cfg.compute_group_0_warp_ids)
-                seed_steep_any = cutlass.Int32(0)
-                if cutlass.const_expr(cfg.steep_mode != STEEP_FAST):
-                    seed_steep_any = (seed_steep_ptr.load() | (seed_steep_ptr + 1).load()) | ((seed_steep_ptr + 2).load() | (seed_steep_ptr + 3).load())
+                seed_steep_any = steep_tile_mask(cfg, seed_steep_ptr)
                 row_lo_addr = tmem_row << 16
                 seed_vw = 16 // (mDstate_in.element_type.width // 8)
                 dstate_src = (mDstate_in.iterator + mDstate_in.layout((batch_idx, head_idx, state_gmem_row, 0))).raw_ptr()
@@ -1501,9 +1490,7 @@ def compute1_warp_group(
                 bars.mb_decay_scale_ready[scale_stage].wait(scale_phase)
                 next_scale_ptr = sDecay_scale_raw.data_ptr() + scale_stage * cfg.d_k
                 next_steep_ptr = sSteepTile_ptr + scale_stage * len(cfg.compute_group_0_warp_ids)
-                next_steep_any = cutlass.Int32(0)
-                if cutlass.const_expr(cfg.steep_mode != STEEP_FAST):
-                    next_steep_any = (next_steep_ptr.load() | (next_steep_ptr + 1).load()) | ((next_steep_ptr + 2).load() | (next_steep_ptr + 3).load())
+                next_steep_any = steep_tile_mask(cfg, next_steep_ptr)
                 row_lo_addr = tmem_row << 16
                 for i in cutlass.range(cfg.d_k // 32, unroll=1):
                     dstate_vec = nvvm.tcgen05_ld(
@@ -1527,32 +1514,15 @@ def compute1_warp_group(
                         dstate_pack[0:16],
                     )
                     if next_steep_any != 0:
-                        # a steep channel's dstate input stays undecayed (its K inv column carries the decay): rebuild the
-                        # input from the accumulator, which still holds the undecayed carry
-                        steep_rows = cutlass.const_expr(cfg.d_k // len(cfg.compute_group_0_warp_ids))
-                        for half in cutlass.range_constexpr(2):
-                            steep_vec = nvvm.tcgen05_ld(
-                                "32x32b",
-                                nvvm.make_tmem_ptr(row_lo_addr + (tmem_col + cfg.tmem_dstate_acc_offset + i * 32 + half * 16), cutlass.Float32),
-                                num=16,
-                            )
-                            nvvm.tcgen05_wait("load")
-                            steep_pack = cutlass.Array(cutlass.Int32, 8, alignment=16)
-                            for pc in cutlass.range_constexpr(8):
-                                col0 = i * 32 + half * 16 + 2 * pc
-                                value0 = steep_vec[2 * pc]
-                                value1 = steep_vec[2 * pc + 1]
-                                if (((next_steep_ptr + col0 // steep_rows).load() >> (col0 % steep_rows)) & 1) == 0:
-                                    value0 = value0 * (next_scale_ptr + col0).load()
-                                if (((next_steep_ptr + (col0 + 1) // steep_rows).load() >> ((col0 + 1) % steep_rows)) & 1) == 0:
-                                    value1 = value1 * (next_scale_ptr + col0 + 1).load()
-                                steep_pack[pc] = fp32_to_fp16(value0, value1, dtype=cfg.io_dtype)
-                            nvvm.tcgen05_wait("store")
-                            nvvm.tcgen05_st(
-                                "32x32b",
-                                nvvm.make_tmem_ptr(row_lo_addr + (tmem_col + cfg.tmem_dstate_input_offset + i * 16 + half * 8), cutlass.Int8),
-                                steep_pack[0:8],
-                            )
+                        restore_steep_dstate(
+                            cfg,
+                            row_lo_addr,
+                            tmem_col + cfg.tmem_dstate_acc_offset + i * 32,
+                            tmem_col + cfg.tmem_dstate_input_offset + i * 16,
+                            i * 32,
+                            next_steep_ptr,
+                            next_scale_ptr,
+                        )
                     nvvm.tcgen05_st(
                         "32x32b",
                         nvvm.make_tmem_ptr(row_lo_addr + (tmem_col + cfg.tmem_dstate_acc_offset + i * 32), cutlass.Float32),
@@ -1809,31 +1779,9 @@ def host(
     # ---- launch ----------------------------------------------------------------------
     n_desc = num_sequences
     grid_shape = (cfg.max_active_clusters, 1, 1)
-    frost_gdn2_bprop_summary(
-        cfg,
-        q_ratio,
-        k_ratio,
-        tensormap_workspace,
-        n_desc,
-        cu_seqlens,
-        a_log,
-        dt_bias,
-        d_initial_state,
-        d_final_state,
-        work_items,
-        work_count,
-        scheduler_counter,
-        scale,
-    ).launch(
-        grid=grid_shape,
-        block=(cfg.threads_per_cta, 1, 1),
-        stream=stream,
-        use_pdl=USE_PDL,
-        min_blocks_per_mp=1,
-    )
-    if cutlass.const_expr(cfg.steep_mode == STEEP_FAST):
+    for launch_idx in cutlass.range_constexpr(2 if cfg.steep_mode == STEEP_FAST else 1):
         frost_gdn2_bprop_summary(
-            steep_exact_cfg(cfg),
+            steep_launch_cfg(cfg, launch_idx),
             q_ratio,
             k_ratio,
             tensormap_workspace,
