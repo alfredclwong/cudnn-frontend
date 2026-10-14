@@ -596,3 +596,14 @@ Join the correction writers before an elected lane publishes the ready barrier.
 The async-proxy fence orders the issuing thread's accesses, but does not join
 the other lanes that wrote correction rows. The group barrier that protects
 scratch reuse must precede the elected K-ready arrival.
+Join correction readers before an elected lane releases their stage as well.
+
+Choose bounded per-channel scales before backward gradient assembly. Do not
+interpret token logs as prefix exponentials and then reload the accumulators
+to repair those lanes. `gradient_operand_scales` supplies the decay, inverse
+and restore factors; the shared exact correction adds the intra-tile terms.
+
+The exact backward dA and dM writers both arrive on the existing diagonal-ready
+barrier after waiting for its slot to be free. Count both warps directly; avoid
+forwarding one producer's readiness through a separate named barrier. FAST
+keeps the original single-producer count because it does not consume the dM copy.

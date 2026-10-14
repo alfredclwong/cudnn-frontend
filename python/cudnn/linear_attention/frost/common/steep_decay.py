@@ -242,6 +242,24 @@ def steep_operand_scales(cfg: cutlass.Constexpr, row, channel, exchange_ptr, log
 
 
 @cute.jit
+def gradient_operand_scales(cfg: cutlass.Constexpr, channel_steep, row, channel, value, exchange_ptr, log_last_ptr):
+    """Return decay, inverse-gradient and restore scales before gradient assembly.
+
+    Steep channels use bounded prefix/suffix factors. Their inverse-gradient
+    contribution comes from the exact intra-tile correction, so its scale is zero.
+    """
+    decay = value
+    inverse = cutlass.Float32(0.0)
+    restore = cutlass.Float32(0.0)
+    if channel_steep != 0:
+        decay, restore = steep_operand_scales(cfg, row, channel, exchange_ptr, log_last_ptr)
+    else:
+        inverse = cute.math.rcp(value, approx=True, ftz=True)
+        restore = inverse
+    return decay, inverse, restore
+
+
+@cute.jit
 def row_operand_scales(cfg: cutlass.Constexpr, bits, reg_idx, row, channel, value, last_value, exchange_ptr, log_last_ptr):
     """Return decay, inverse and restore-multiplier scales before operand construction.
 
@@ -343,6 +361,9 @@ def add_steep_corrections(cfg: cutlass.Constexpr, acc, corr_ptr, lane_idx):
         if cutlass.const_expr(accum_idx % 2 == 1):
             col = col + cutlass.Int32(1)
         acc[accum_idx] = acc[accum_idx] + (corr_ptr + row * cfg.b_t + col).load()
+    # Callers release this stage through an elected lane. Join every reader
+    # before that lane can let the producer overwrite the correction tile.
+    nvvm.bar_warp_sync(cute.arch.FULL_MASK)
 
 
 @cute.jit

@@ -103,9 +103,11 @@ def test_fwd_bwd_steep_channel_decay(backend, variant, pattern, shape, K):
 
 
 @pytest.mark.parametrize("variant", ("gdn2",))
-def test_fwd_steep_channel_decay_initial_state(backend, variant):
+@pytest.mark.parametrize("K", [64, 128])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
+def test_fwd_steep_channel_decay_initial_state(backend, variant, K, dtype):
     """The steep path with an initial state, a final state and no in-kernel L2 norm."""
-    case = steep_gate(make_case(variant, torch.bfloat16, seq_lens=[96, 32, 160, 1]), "spike")
+    case = steep_gate(make_case(variant, dtype, K=K, seq_lens=[96, 32, 160, 1]), "spike")
     assert_fwd_parity(backend, case, use_initial_state=True)
     assert_bwd_parity(backend, case, use_initial_state=True, use_dfs=True)
 
