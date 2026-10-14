@@ -580,3 +580,10 @@ Do not obtain steep-channel interval decay by subtracting inclusive fp32
 prefixes: a -1e8 gate can erase following -1 gates from both prefixes. Retain
 individual conditioned log gates and sum only the interval. The `huge_spike`
 pattern covers this in forward, backward, and the beta guard.
+
+Per-group scan ballots need two alternating slots: a mild tile skips the exact
+path's final group barrier, so its next iteration can publish before all warps
+finish reading the previous ballots. The next scan's publication barrier keeps
+each group from advancing two iterations ahead. Keep last-token/norm scratch
+behind the exact path's final barrier. The `alternating` gate pattern exercises
+mild/steep transitions in each scan group on all three schedules.

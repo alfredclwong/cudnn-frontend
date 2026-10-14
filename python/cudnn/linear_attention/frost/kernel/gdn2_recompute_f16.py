@@ -966,7 +966,10 @@ def compute0_warp_group(
 
             # ---- steep channels: an in-tile log2 prefix below the steep threshold (a gate in (0, 1] never raises the
             # prefix, so the last row holds its minimum) ----
-            steep_scan_ptr = sSteepScan.data_ptr() + cg0_group_id * cfg.cg0_warps_per_group
+            # Alternate scan words: a mild tile has no final group barrier, so
+            # another warp may start the next scan while this tile still reads them.
+            steep_scan_stage = (local_chunk // cfg.cg0_group_count) % 2
+            steep_scan_ptr = sSteepScan.data_ptr() + (cg0_group_id * 2 + steep_scan_stage) * cfg.cg0_warps_per_group
             steep_last_ptr = sSteepLast.data_ptr() + cg0_group_id * cfg.d_k
             channel_steep, steep_word = classify_steep_channel(cfg, prefix_acc, sK_ptr, channel_dim, channel_rows, mSteepSlot, lane_idx)
             if cutlass.const_expr(cfg.steep_mode != STEEP_FAST):
@@ -2412,7 +2415,7 @@ def frost_gdn2_recompute(
     sScheduler = cutlass.Array(cutlass.Int32, cfg.scheduler_stages, space=SMEM, alignment=16)
     # steep key channels (common/steep_decay.py): per CG0 group the scan's ballot words, last-token log2 gates and
     # k inverse norms; per decay stage the tile's ballot words and the KK corrections
-    sSteepScan = cutlass.Array(cutlass.Int32, cfg.cg0_group_count * cfg.cg0_warps_per_group, space=SMEM, alignment=16)
+    sSteepScan = cutlass.Array(cutlass.Int32, cfg.cg0_group_count * 2 * cfg.cg0_warps_per_group, space=SMEM, alignment=16)
     sSteepLast = cutlass.Array(cutlass.Float32, cfg.cg0_group_count * cfg.d_k, space=SMEM, alignment=16)
     sSteepNorm = cutlass.Array(cutlass.Float32, cfg.cg0_group_count * cfg.b_t, space=SMEM, alignment=16)
     sSteepTile = cutlass.Array(cutlass.Int32, cfg.smem_decay_stages * cfg.cg0_warps_per_group, space=SMEM, alignment=16)

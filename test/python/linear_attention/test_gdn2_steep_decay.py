@@ -67,12 +67,17 @@ def steep_gate(case, pattern):
             seq[:, case.HO - 1, 33] = -50.0
         elif pattern == "all_channels":  # every key channel of a head steep at once
             seq[:, 0, :] = -12.0
+        elif pattern == "alternating":
+            # Each scan group sees mild then steep tiles on successive iterations.
+            # This exercises scratch reuse when the mild tile skips the correction barriers.
+            tokens = torch.arange(e - s, device=g.device)
+            seq[:, 0, 7] = torch.where((tokens // 32) % 2 == 0, -0.01, -12.0)
         else:
             raise ValueError(pattern)
     return case.clone(gates=dict(case.gates, g=g))
 
 
-STEEP_PATTERNS = ("steady", "spike", "huge_spike", "two_spikes", "offset_window", "extreme", "all_channels")
+STEEP_PATTERNS = ("steady", "spike", "huge_spike", "two_spikes", "offset_window", "extreme", "all_channels", "alternating")
 STEEP_SHAPES = {  # the schedules the engine picks on a 148-SM part: the d_v-split prep path, the uncut prefill, the piece chain
     "prep": dict(seq_lens=[517, 0, 91, 128, 1]),
     "uncut": dict(seq_lens=[96, 32, 160, 1]),
