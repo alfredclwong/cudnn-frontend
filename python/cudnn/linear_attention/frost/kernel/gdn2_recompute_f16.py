@@ -88,7 +88,6 @@ from ..common.host import get_dtype
 from ..common.blockwise_inverse import invert_unit_lower_16x16_fragments
 from ..common.steep_decay import (
     STEEP_FAST,
-    STEEP_INLINE,
     add_steep_corrections,
     classify_steep_channel,
     lane_steep_bits,
@@ -2847,7 +2846,6 @@ def get_compiled_cache(
     order_in_prologue: bool,
     order_gen: bool,
     log_gate: bool = True,
-    steep_mode: int = STEEP_FAST,
 ):
     """Return a mutable dict that lazily stores the compiled kernel."""
     return {}
@@ -2892,7 +2890,6 @@ def compile(
     seed_every_n_tokens,
     stream,
     log_gate: bool = True,
-    steep_mode: int = STEEP_FAST,
 ):
     """JIT-compile the chunked GDN-2 recompute kernel for one static config."""
     cfg = build_cfg(
@@ -2906,7 +2903,6 @@ def compile(
         l2norm=l2norm,
         safe_gate=safe_gate,
         log_gate=log_gate,
-        steep_mode=steep_mode,
         gate_scale_log2=gate_scale_log2,
         beta_sigmoid=beta_sigmoid,
         allow_neg_eigval=allow_neg_eigval,
@@ -3079,9 +3075,6 @@ def chunk_gdn2_recompute(
         dt_bias = None
     cu_stream = cuda_driver.CUstream(int(stream))
 
-    # a final state written over the initial state cannot be relaunched (common/steep_decay.py)
-    aliased = initial_state is not None and output_state is not None and initial_state.data_ptr() == output_state.data_ptr()
-    steep_mode = STEEP_INLINE if aliased else STEEP_FAST
     cache = get_compiled_cache(
         str(k.dtype),
         str(state_dtype_src),
@@ -3108,7 +3101,6 @@ def chunk_gdn2_recompute(
         order_in_prologue,
         order_gen,
         log_gate=log_gate,
-        steep_mode=steep_mode,
     )
 
     if "compiled" not in cache:
@@ -3182,7 +3174,6 @@ def chunk_gdn2_recompute(
             seed_every_n_tokens=seed_every_n_tokens,
             stream=cu_stream,
             log_gate=log_gate,
-            steep_mode=steep_mode,
         )
 
     state_checkpoints_for_descs = output_state_checkpoints if enable_checkpoints else None

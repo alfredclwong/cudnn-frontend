@@ -568,6 +568,10 @@ values: an overwrite-capable graph can bind separate state buffers on warmup
 and alias them later. Keep its exact path inline for the plan's lifetime.
 `test_forward_state_alias_after_graph_warmup` and
 `test_steep_channel_decay_overwrite_initial_state` exercise both directions.
+The public summary ops have no overwrite attribute; their state outputs remain
+separate. Summary/recompute wrappers must not infer an extra specialization
+from first-call pointer equality. `test_steep_summary_matches_prefill` covers
+their seeded state and optional transition outputs on steep tiles.
 
 A gate-prefix cutoff alone does not bound an unnormalized inverse operand.
 Include the key magnitude in the range decision; `k=5` already overflows fp16

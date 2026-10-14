@@ -90,7 +90,6 @@ from ..common.host import get_dtype
 from ..common.blockwise_inverse import invert_unit_lower_16x16_fragments
 from ..common.steep_decay import (
     STEEP_FAST,
-    STEEP_INLINE,
     add_steep_corrections,
     classify_steep_channel,
     lane_steep_bits,
@@ -2668,7 +2667,6 @@ def get_compiled_cache(
     run_order: bool,
     order_gen: bool,
     log_gate: bool = True,
-    steep_mode: int = STEEP_FAST,
 ):
     """Return a mutable dict that lazily stores the compiled kernel."""
     return {}
@@ -2705,7 +2703,6 @@ def compile(
     tensormap_workspace_cute,
     stream,
     log_gate: bool = True,
-    steep_mode: int = STEEP_FAST,
 ):
     """JIT-compile the fused GDN-2 summary kernel for one static config."""
     cfg = build_cfg(
@@ -2715,7 +2712,6 @@ def compile(
         l2norm=l2norm,
         safe_gate=safe_gate,
         log_gate=log_gate,
-        steep_mode=steep_mode,
         gate_scale_log2=gate_scale_log2,
         beta_sigmoid=beta_sigmoid,
         allow_neg_eigval=allow_neg_eigval,
@@ -2817,9 +2813,6 @@ def chunk_gdn2_summary(
         dt_bias = None
     cu_stream = cuda_driver.CUstream(int(stream))
 
-    # a final state written over the initial state cannot be relaunched (common/steep_decay.py)
-    aliased = initial_state is not None and output_state is not None and initial_state.data_ptr() == output_state.data_ptr()
-    steep_mode = STEEP_INLINE if aliased else STEEP_FAST
     cache = get_compiled_cache(
         str(k.dtype),
         str(output_state.dtype),
@@ -2844,7 +2837,6 @@ def chunk_gdn2_summary(
         run_order,
         order_gen,
         log_gate=log_gate,
-        steep_mode=steep_mode,
     )
 
     if "compiled" not in cache:
@@ -2903,7 +2895,6 @@ def chunk_gdn2_summary(
             tensormap_workspace_cute=tensormap_workspace_cute,
             stream=cu_stream,
             log_gate=log_gate,
-            steep_mode=steep_mode,
         )
 
     compiled = cache["compiled"]

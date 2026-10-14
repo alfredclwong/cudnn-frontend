@@ -21,10 +21,12 @@ from .test_la import (
     build_and_pin,
     chain_grads,
     clear_caches,
+    kernel_m,
     make_case,
     op_args,
     random_state,
     run_fwd,
+    run_summary,
 )
 
 pytestmark = [pytest.mark.L0, pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")]
@@ -103,6 +105,20 @@ def test_fwd_steep_channel_decay_initial_state(backend, variant):
     case = steep_gate(make_case(variant, torch.bfloat16, seq_lens=[96, 32, 160, 1]), "spike")
     assert_fwd_parity(backend, case, use_initial_state=True)
     assert_bwd_parity(backend, case, use_initial_state=True, use_dfs=True)
+
+
+@pytest.mark.parametrize("K", [64, 128])
+@pytest.mark.parametrize("output_transition", [False, True])
+def test_steep_summary_matches_prefill(backend, K, output_transition):
+    """Both summary wrappers retain the seeded state and transition through steep/mild tiles."""
+    case = steep_gate(make_case("gdn2", torch.bfloat16, K=K, seq_lens=[96, 0, 32, 160]), "alternating")
+    state = random_state(case)
+    _, expected = run_fwd(backend, case, initial_state=state, output_final_state=True, batch_invariant=True)
+    final_state, transition = run_summary(case, initial_state=state, output_transition=output_transition, batch_invariant=True)
+    assert torch.isfinite(final_state).all()
+    assert_bitwise("summary final_state", final_state, expected)
+    if output_transition:
+        assert_bitwise("summary transition", transition, kernel_m(case, batch_invariant=True))
 
 
 @pytest.mark.parametrize("variant", ("gdn2",))
