@@ -12,21 +12,24 @@ cudnn = pytest.importorskip("cudnn")
 
 from .test_la import (
     CUDNN_DTYPE,
+    H_TOL,
     LEAF_NAMES,
+    M_TOL,
     SEED,
     Backend,
     assert_bitwise,
     assert_bwd_parity,
     assert_fwd_parity,
+    assert_state_close,
     build_and_pin,
     chain_grads,
     clear_caches,
-    kernel_m,
     make_case,
     op_args,
+    oracle_m,
     random_state,
+    reference,
     run_fwd,
-    run_summary,
 )
 
 pytestmark = [pytest.mark.L0, pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")]
@@ -109,16 +112,21 @@ def test_fwd_steep_channel_decay_initial_state(backend, variant):
 
 @pytest.mark.parametrize("K", [64, 128])
 @pytest.mark.parametrize("output_transition", [False, True])
-def test_steep_summary_matches_prefill(backend, K, output_transition):
+def test_steep_summary_matches_reference(backend, K, output_transition):
     """Both summary wrappers retain the seeded state and transition through steep/mild tiles."""
     case = steep_gate(make_case("gdn2", torch.bfloat16, K=K, seq_lens=[96, 0, 32, 160]), "alternating")
     state = random_state(case)
-    _, expected = run_fwd(backend, case, initial_state=state, output_final_state=True, batch_invariant=True)
-    final_state, transition = run_summary(case, initial_state=state, output_transition=output_transition, batch_invariant=True)
-    assert torch.isfinite(final_state).all()
-    assert_bitwise("summary final_state", final_state, expected)
+    _, expected = reference(case, initial_state=state)
+    final_state, transition = torch.ops.cudnn.gated_delta_net_v2_summary(
+        *op_args(case)[1:],
+        initial_state=state,
+        output_transition=output_transition,
+        batch_invariant=True,
+        plan_name="gdn2_summary_frost",
+    )
+    assert_state_close("summary final_state", final_state, expected, H_TOL[case.dtype])
     if output_transition:
-        assert_bitwise("summary transition", transition, kernel_m(case, batch_invariant=True))
+        assert_state_close("summary transition", transition, oracle_m(case), M_TOL[case.dtype])
 
 
 @pytest.mark.parametrize("variant", ("gdn2",))

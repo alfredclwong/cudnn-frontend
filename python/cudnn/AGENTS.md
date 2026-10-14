@@ -570,7 +570,7 @@ and alias them later. Keep its exact path inline for the plan's lifetime.
 `test_steep_channel_decay_overwrite_initial_state` exercise both directions.
 The public summary ops have no overwrite attribute; their state outputs remain
 separate. Summary/recompute wrappers must not infer an extra specialization
-from first-call pointer equality. `test_steep_summary_matches_prefill` covers
+from first-call pointer equality. `test_steep_summary_matches_reference` covers
 their seeded state and optional transition outputs on steep tiles.
 
 A gate-prefix cutoff alone does not bound an unnormalized inverse operand.
@@ -591,3 +591,8 @@ finish reading the previous ballots. The next scan's publication barrier keeps
 each group from advancing two iterations ahead. Keep last-token/norm scratch
 behind the exact path's final barrier. The `alternating` gate pattern exercises
 mild/steep transitions in each scan group on all three schedules.
+
+Join the correction writers before an elected lane publishes the ready barrier.
+The async-proxy fence orders the issuing thread's accesses, but does not join
+the other lanes that wrote correction rows. The group barrier that protects
+scratch reuse must precede the elected K-ready arrival.
