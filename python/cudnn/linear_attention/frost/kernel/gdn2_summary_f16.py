@@ -193,8 +193,13 @@ def make_bars(cfg) -> Gdn2SummaryBars:
         mb_gate_exchange_ready=MBarrier(
             alloc(cfg.smem_raw_stages), try_wait=True, stages=cfg.smem_raw_stages, init_count=CG0_GROUP_WARPS, producer=Producer.THREAD
         ),
+        # Exact correction rows use scalar stores; count every writer directly.
         mb_k_decay_inv_cg0_ready=MBarrier(
-            alloc(cfg.smem_decay_stages), try_wait=True, stages=cfg.smem_decay_stages, init_count=CG0_GROUP_WARPS, producer=Producer.THREAD
+            alloc(cfg.smem_decay_stages),
+            try_wait=True,
+            stages=cfg.smem_decay_stages,
+            init_count=CG0_GROUP_WARPS if cfg.steep_mode == STEEP_FAST else cfg.cg0_threads_per_group,
+            producer=Producer.THREAD,
         ),
         mb_decay_tcgen05_done=MBarrier(alloc(cfg.smem_decay_stages), try_wait=True, stages=cfg.smem_decay_stages, init_count=1, producer=Producer.MMA_COMMIT),
         mb_decay_register_mma_done=MBarrier(alloc(cfg.smem_decay_stages), try_wait=True, stages=cfg.smem_decay_stages, init_count=1, producer=Producer.THREAD),
@@ -203,7 +208,7 @@ def make_bars(cfg) -> Gdn2SummaryBars:
             alloc(cfg.qk_scale_ready_stages),
             try_wait=True,
             stages=cfg.qk_scale_ready_stages,
-            init_count=CG0_GROUP_WARPS,
+            init_count=CG0_GROUP_WARPS if cfg.steep_mode == STEEP_FAST else cfg.cg0_threads_per_group,
             producer=Producer.THREAD,
         ),
         mb_t_inv_ready=MBarrier(
@@ -1139,7 +1144,7 @@ def compute0_warp_group(
                     (sSteepTile.data_ptr() + decay_stage * cfg.cg0_warps_per_group + cg0_local_warp).store((steep_scan_ptr + cg0_local_warp).load())
             if steep_any == 0:
                 nvvm.fence_proxy("async.shared", space="cta")
-                if nvvm.elect_sync():
+                if cutlass.const_expr(cfg.steep_mode != STEEP_FAST) or nvvm.elect_sync():
                     bars.mb_k_decay_inv_cg0_ready[decay_stage].arrive()
 
             # ---- K restore operand store ---------------------------------------------
@@ -1186,14 +1191,14 @@ def compute0_warp_group(
                     None,
                     sSteepCorr.data_ptr() + decay_stage * (2 * cfg.b_t * cfg.b_t),
                 )
-                # Join all correction writers before an elected lane publishes their stores.
-                # This also protects the per-group scratch from the next chunk's writers.
+                # Finish reading the per-group scratch before the next chunk can reuse it.
+                # Each correction writer publishes its own stores below.
                 nvvm.barrier_cta_sync(cfg.cg0_group_sync_barrier_base_id + cg0_group_id, thread_count=cfg.cg0_threads_per_group)
                 nvvm.fence_proxy("async.shared", space="cta")
-                if nvvm.elect_sync():
+                if cutlass.const_expr(cfg.steep_mode != STEEP_FAST) or nvvm.elect_sync():
                     bars.mb_k_decay_inv_cg0_ready[decay_stage].arrive()
             nvvm.fence_proxy("async.shared", space="cta")
-            if nvvm.elect_sync():
+            if cutlass.const_expr(cfg.steep_mode != STEEP_FAST) or nvvm.elect_sync():
                 bars.mb_qk_scale_ready[qk_scale_ready_stage].arrive()
 
             # ---- state stage, left key half: pack, publish, fp32 decay ---------------

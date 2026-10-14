@@ -592,10 +592,11 @@ each group from advancing two iterations ahead. Keep last-token/norm scratch
 behind the exact path's final barrier. The `alternating` gate pattern exercises
 mild/steep transitions in each scan group on all three schedules.
 
-Join the correction writers before an elected lane publishes the ready barrier.
+Count every exact correction writer directly on the K/Q-ready barriers.
 The async-proxy fence orders the issuing thread's accesses, but does not join
-the other lanes that wrote correction rows. The group barrier that protects
-scratch reuse must precede the elected K-ready arrival.
+the other lanes that wrote correction rows. Keep the group barrier before
+K-ready publication to protect scratch reuse. FAST retains its original
+elected-lane arrivals and warp-sized counts.
 Join correction readers before an elected lane releases their stage as well.
 
 Choose bounded per-channel scales before backward gradient assembly. Do not
