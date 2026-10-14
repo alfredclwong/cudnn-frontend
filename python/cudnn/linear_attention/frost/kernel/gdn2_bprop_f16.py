@@ -118,7 +118,7 @@ from ..common.steep_decay import (
     steep_beta,
     steep_launch_cfg,
     steep_exit_unless_flagged,
-    steep_grad_terms,
+    steep_grad_corrections,
     restore_steep_dstate,
     steep_operand_scales,
     steep_restore_scale,
@@ -3195,7 +3195,7 @@ def compute2_warp_group(
                                 for n in cutlass.range_constexpr(2):
                                     k = rep * 4 + cs * 2 + n
                                     token = fragment_quad * 2 + cutlass.Int32(rep * 8 + n)
-                                    dq_attn, dq_mma, dk_inv, dkd_attn, dkd_mma = steep_grad_terms(
+                                    dq_delta, dk_inv, db_delta, dgate_delta = steep_grad_corrections(
                                         cfg,
                                         channel_cs,
                                         token,
@@ -3209,22 +3209,16 @@ def compute2_warp_group(
                                         steep_k_norm_ptr,
                                         steep_dadm_ptr,
                                     )
-                                    exp_t, _ = steep_operand_scales(cfg, token, channel_cs, sGate_exchange_ptr, steep_last_ptr)
-                                    k_t = (steep_k_ptr + raw_offset(cfg, token, channel_cs)).load().to(cutlass.Float32)
-                                    if cutlass.const_expr(cfg.l2norm):
-                                        k_t = k_t * (steep_k_norm_ptr + token).load()
-                                    beta_t = steep_beta(cfg, sBetaP_ptr, token, channel_cs)
-                                    dq_frag[k] = dq_frag[k] + scale * (dq_attn - exp_t * dq_mma)
-                                    dkd_delta = exp_t * dkd_mma - dkd_attn
-                                    db_frag[k] = db_frag[k] + k_t * dkd_delta
-                                    dgate_frag[k] = dgate_frag[k] + beta_t * dkd_delta
-                                    dk_frag[k] = dk_frag[k] + dk_inv + beta_t * dkd_delta
+                                    dq_frag[k] = dq_frag[k] + dq_delta
+                                    db_frag[k] = db_frag[k] + db_delta
+                                    dgate_frag[k] = dgate_frag[k] + dgate_delta
+                                    dk_frag[k] = dk_frag[k] + dk_inv + dgate_delta
                 else:
                     if ((steep_scan_ptr + channel // steep_channel_rows).load() >> (channel % steep_channel_rows)) & 1 != 0:
 
                         # ponytail: dynamic t + select chains keep the never-taken slow path out of the fast path's registers
                         for t in cutlass.range(cfg.b_t, unroll=1):
-                            dq_attn, dq_mma, dk_inv, dkd_attn, dkd_mma = steep_grad_terms(
+                            dq_delta, dk_inv, db_delta, dgate_delta = steep_grad_corrections(
                                 cfg,
                                 channel,
                                 t,
@@ -3238,16 +3232,7 @@ def compute2_warp_group(
                                 steep_k_norm_ptr,
                                 steep_dadm_ptr,
                             )
-                            exp_t, _ = steep_operand_scales(cfg, t, channel, sGate_exchange_ptr, steep_last_ptr)
-                            k_t = (steep_k_ptr + raw_offset(cfg, t, channel)).load().to(cutlass.Float32)
-                            if cutlass.const_expr(cfg.l2norm):
-                                k_t = k_t * (steep_k_norm_ptr + t).load()
-                            beta_t = steep_beta(cfg, sBetaP_ptr, t, channel)
-                            dq_delta = scale * (dq_attn - exp_t * dq_mma)
-                            dkd_delta = exp_t * dkd_mma - dkd_attn
-                            db_delta = k_t * dkd_delta
-                            dgate_delta = beta_t * dkd_delta
-                            dk_delta = dk_inv + beta_t * dkd_delta
+                            dk_delta = dk_inv + dgate_delta
                             for u in cutlass.range_constexpr(cfg.b_t):
                                 if t == u:
                                     dq_n[u] = dq_n[u] + dq_delta

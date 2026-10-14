@@ -56,7 +56,7 @@ The steep path (``STEEP_EXACT`` / ``STEEP_INLINE``):
   their K inv column; the register-MMA warps add the corrections to their
   accumulators;
 - the backward rebuilds a steep channel's dQ / dK / dgate / dbeta lanes from the accumulators and adds the exact
-  intra-tile terms (``steep_grad_terms``).
+  intra-tile terms (``steep_grad_corrections``).
 """
 
 import dataclasses
@@ -346,19 +346,23 @@ def add_steep_corrections(cfg: cutlass.Constexpr, acc, corr_ptr, lane_idx):
 
 
 @cute.jit
-def steep_grad_terms(cfg: cutlass.Constexpr, channel, t, scale, exchange_ptr, log_last_ptr, raw_q_ptr, raw_k_ptr, beta_ptr, q_norm_ptr, k_norm_ptr, dadm_ptr):
+def steep_grad_corrections(
+    cfg: cutlass.Constexpr, channel, t, scale, exchange_ptr, log_last_ptr, raw_q_ptr, raw_k_ptr, beta_ptr, q_norm_ptr, k_norm_ptr, dadm_ptr
+):
     """The backward's intra-tile terms of steep channel ``channel`` at token ``t`` (bprop compute group 2).
 
     ``dadm_ptr`` holds the chunk's strict-lower dA and dM tiles, ``[2, BT, BT]`` in the io dtype, exactly as the
     tcgen05 GEMMs read them.  With ``F(t, s) = 2^(g[t] - g[s])`` and ``K inv[s] = k_n[s] * 2^(g[BT - 1] - g[s])``
-    rounded to the io dtype (the steep column of the K inv operand), returns
+    rounded to the io dtype (the steep column of the K inv operand), forms
 
         dq_attn  = sum_{s<t} dA[t, s] k_n[s] F(t, s)          dq_mma  = sum_{s<t} dA[t, s] K inv[s]
         dkd_attn = sum_{s<t} dM[t, s] k_n[s] F(t, s)          dkd_mma = sum_{s<t} dM[t, s] K inv[s]
         dk_inv   = sum_{s>t} (scale q_n[s] dA[s, t] - beta[s] k_n[s] dM[s, t]) F(s, t)
 
-    every exponent of F at most 0.  ``*_mma`` are the steep column's products that the dQ attn and dK decay GEMMs
-    already accumulated."""
+    every exponent of F at most 0. ``*_mma`` are the steep column's products that the dQ attn and dK decay GEMMs
+    already accumulated. Return the dQ correction, the inverse-side dK term, the beta correction and the
+    decay-side dK correction (also used for dgate). Callers only map these onto their register layouts;
+    they add the two dK terms in their original accumulation order."""
     dq_attn = cutlass.Float32(0.0)
     dq_mma = cutlass.Float32(0.0)
     dkd_attn = cutlass.Float32(0.0)
@@ -387,7 +391,14 @@ def steep_grad_terms(cfg: cutlass.Constexpr, channel, t, scale, exchange_ptr, lo
                 da = (dadm_ptr + s * cfg.b_t + t).load().to(cutlass.Float32)
                 dm = (dadm_ptr + tile + s * cfg.b_t + t).load().to(cutlass.Float32)
                 dk_inv = dk_inv + ((q_s * scale) * da - (k_s * steep_beta(cfg, beta_ptr, s, channel)) * dm) * decay
-    return dq_attn, dq_mma, dk_inv, dkd_attn, dkd_mma
+    exp_t, _ = steep_operand_scales(cfg, t, channel, exchange_ptr, log_last_ptr)
+    k_t = (raw_k_ptr + raw_offset(cfg, t, channel)).load().to(cutlass.Float32)
+    if cutlass.const_expr(cfg.l2norm):
+        k_t = k_t * (k_norm_ptr + t).load()
+    beta_t = steep_beta(cfg, beta_ptr, t, channel)
+    dq_delta = scale * (dq_attn - exp_t * dq_mma)
+    dkd_delta = exp_t * dkd_mma - dkd_attn
+    return dq_delta, dk_inv, k_t * dkd_delta, beta_t * dkd_delta
 
 
 @cute.jit
