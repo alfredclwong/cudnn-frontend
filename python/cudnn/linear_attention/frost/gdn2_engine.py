@@ -479,6 +479,7 @@ class CompiledGdn2Bwd:
         from .common.gate_bwd import GATE_BWD_BLOCKS, channel_gate_bwd
         from .common.head_reduce import head_group_reduce
         from .common.host import tensormap_workspace_bytes
+        from .common.steep_scratch import state_gradient_scratch_layout
 
         self.head_group_reduce = head_group_reduce
         self.channel_gate_bwd = channel_gate_bwd
@@ -533,6 +534,12 @@ class CompiledGdn2Bwd:
 
         layout = WorkspaceLayout()
         regions = []
+        # One FP32 state and bounded-key ring per persistent CTA; sequential backward kernels share the arena.
+        # v1.30.0 backport: warmup split-K spreads one (sequence, head) over up to num_sm CTAs.
+        state_grad_layout = state_gradient_scratch_layout(d_k=K, d_v=V, b_t=self.b_t, decay_stages=bwd_module.CFG.SMEM_DECAY_STAGES)
+        scratch_ctas = self.num_sm if self.split else min(self.num_sm, self.num_pieces * HO)
+        dstate_scratch_elements = max(1, scratch_ctas) * (state_grad_layout.nbytes // 4)
+        regions.append(("dstate_scratch", layout.add(dstate_scratch_elements * 4), "float32", (dstate_scratch_elements,)))
         off_scheduler = layout.add(40 if self.chain else 16)
         regions += [
             ("scheduler_recompute", off_scheduler, "int32", (2,)),
@@ -764,6 +771,7 @@ class CompiledGdn2Bwd:
                 scheduler_bwd=region["scheduler_bwd"],
                 recompute_words=region.get("recompute_tensormaps"),
                 bprop_words=region["bwd_tensormaps"],
+                dstate_scratch=region["dstate_scratch"],
                 dstate_snapshot=region.get("dstate_snapshot"),
             )
             schedule = dict(
@@ -869,6 +877,7 @@ class CompiledGdn2Bwd:
             series_words=region.get("recompute_tensormaps_series"),
             bprop_summary_words=region["summary_tensormaps"],
             bprop_words=region["bwd_tensormaps"],
+            dstate_scratch=region["dstate_scratch"],
             checkpoints=checkpoint_series,
             seed_checkpoints=state_checkpoints if coarse else None,
             dq=dq_out,
@@ -1395,6 +1404,7 @@ class CompiledGdn2SummaryBwd:
 
     def __init__(self, node, summary_module):
         from .common.host import tensormap_workspace_bytes
+        from .common.steep_scratch import state_gradient_scratch_layout
         from .common.piece_chain import build_state_chain, chain_rows_per_cta, choose_pieces, piece_table_layout, run_state_chain
         from .kernel.gdn2_chain_prologue_f16 import run_chain_prologue
         from .common.split_k import WORK_ITEM_FIELDS, build_split_table, chunk_scratch_rows, compute_ideal_chunks, max_work_items, run_table
@@ -1461,6 +1471,12 @@ class CompiledGdn2SummaryBwd:
         self.num_pieces = B * self.pieces if self.chain else B
         layout = WorkspaceLayout()
         regions = []
+        # One FP32 state and bounded-key ring per persistent CTA; sequential backward kernels share the arena.
+        # v1.30.0 backport: warmup split-K spreads one (sequence, head) over up to num_sm CTAs.
+        state_grad_layout = state_gradient_scratch_layout(d_k=K, d_v=V, b_t=self.b_t, decay_stages=summary_module.CFG.SMEM_DECAY_STAGES)
+        scratch_ctas = self.num_sm if self.split else min(self.num_sm, self.num_pieces * HO)
+        dstate_scratch_elements = max(1, scratch_ctas) * (state_grad_layout.nbytes // 4)
+        regions.append(("dstate_scratch", layout.add(dstate_scratch_elements * 4), "float32", (dstate_scratch_elements,)))
         if self.chain:
             from .kernel import gdn2_recompute_f16 as recompute_module
 
@@ -1595,6 +1611,7 @@ class CompiledGdn2SummaryBwd:
                 stream,
                 a_log=a_log if self.safe_gate else None,
                 dt_bias=dt_bias if self.safe_gate else None,
+                dstate_scratch=region["dstate_scratch"],
             )
             if self.has_transition:
                 self.run_transition(k, g, beta, cu, transition, a_log, dt_bias, region, stream)
@@ -1654,6 +1671,7 @@ class CompiledGdn2SummaryBwd:
             device=self.device,
             num_sm=self.num_sm,
             stream=stream,
+            dstate_scratch=region["dstate_scratch"],
         )
         if self.has_transition:
             self.run_transition(k, g, beta, cu, transition, a_log, dt_bias, region, stream)
@@ -1813,6 +1831,7 @@ class CompiledGdn2SummaryBwd:
                 a_log=gate_a,
                 dt_bias=gate_dt,
                 own_prologue=False,
+                dstate_scratch=region["dstate_scratch"],
             )
         else:
             self.state_m_cache = self.recompute.chunk_gdn2_recompute(
@@ -1873,6 +1892,7 @@ class CompiledGdn2SummaryBwd:
                 num_sm=self.num_sm,
                 stream=stream,
                 own_prologue=False,
+                dstate_scratch=region["dstate_scratch"],
             )
             self.chain_reverse = self.build_state_chain(
                 heads_out=self.n_heads_out,
