@@ -548,63 +548,35 @@ CUDA-owning objects, GC-timed release and stream capture: Rule 8.
 
 A chunk kernel that splits a decay `2^(g[t] - g[s])` into `exp2(+g[t])` on one MMA
 operand and `rcp(exp2(g[s]))` on the other is exact only while each factor stays
-in the operand's range. With fp32 math and bf16 operands, the edge is an in-tile
-log2 prefix of -126: `exp2` goes subnormal, `rcp(..., ftz=True)` returns inf, and
-`0 * inf` is NaN. With fp16 operands, `k * 2^-g` overflows near -16. Both edges
-lie inside the documented gate range, `alpha = exp(g)` in (0, 1].
+in the operand's range: an in-tile log2 prefix of -126 with bf16 operands (`exp2`
+goes subnormal, `rcp(..., ftz=True)` returns inf, `0 * inf` is NaN), and about -16
+with fp16 operands (`k * 2^-g` overflows). Both lie inside the documented gate range,
+`alpha = exp(g)` in (0, 1], and a test drawing `alpha` from `uniform(0.5, 1)` misses them.
 
-The GDN-2 kernels route those tiles through `linear_attention/frost/common/steep_decay.py`,
-which evaluates every exponent at `g[t] - g[s] <= 0`. A new kernel with this split
-must do the same; a test that draws `alpha` from `uniform(0.5, 1)` will not catch the edge.
-Keep that path out of the fast kernel: compiled in, even behind a branch never taken, it
-cost the backward 13% on a 163840-token varlen batch. The kernels vote in the fast launch
-and an exact twin, launched after it, exits on entry unless the vote fired (no host sync).
+- Route such tiles through `linear_attention/frost/common/steep_decay.py`, which keeps every
+  exponent at `g[t] - g[s] <= 0`. Its module docstring holds the dispatch and
+  synchronisation invariants.
+- Keep the exact path out of the fast kernel. Compiled in behind a never-taken branch,
+  it cost the backward 13%.
+- Bound the inverse operand with the key magnitude as well as the gate prefix:
+  unnormalized `k=5` overflows fp16 at a prefix of -13.75.
+- Sum individual token logs over the interval. Never subtract inclusive fp32 prefixes:
+  a -1e8 gate erases the following -1 gates from both.
+- Reduce corrections in a fixed order, including when several channels are steep.
+- Use `encode_gate_exchange` for scan classification and exchange encoding. Keep stage selection and
+  barriers in each schedule. Share gate scans and recompute/summary operand construction through
+  the `@cute.jit` stages in `common/gdn2_operands.py`. Size scratch with `common/steep_scratch.py` for both separate forward
+  arrays and backward bank-fill regions; check bank-fill capacity before compilation.
+- An exact relaunch must not read what the fast launch wrote. Seed overwrite-capable plans
+  from a state snapshot (`common/state_snapshot.py`), chosen from the graph contract, never
+  from first-call pointer equality: a graph can bind separate state buffers at warmup and
+  alias them later. A forward graph without a final-state output cannot overwrite its seeds;
+  indexed input pools in such graphs need no snapshot.
 
-Detector: `linear_attention/test_gdn2_steep_decay.py::test_fwd_bwd_steep_channel_decay` (and its
-fp16 twin) pushes one key channel past the edge on every schedule.
-
-Replay safety belongs to the graph contract, not the first execution's pointer
-values: an overwrite-capable graph can bind separate state buffers on warmup
-and alias them later. Keep its exact path inline for the plan's lifetime.
-`test_forward_state_alias_after_graph_warmup` and
-`test_steep_channel_decay_overwrite_initial_state` exercise both directions.
-The public summary ops have no overwrite attribute; their state outputs remain
-separate. Summary/recompute wrappers must not infer an extra specialization
-from first-call pointer equality. `test_steep_summary_matches_reference` covers
-their seeded state and optional transition outputs on steep tiles.
-
-A gate-prefix cutoff alone does not bound an unnormalized inverse operand.
-Include the key magnitude in the range decision; `k=5` already overflows fp16
-at a log2 prefix of -13.75. Correction reductions must use a fixed order,
-including when several channels are steep. The detectors are
-`test_fp16_inverse_range_without_normalization` and
-`test_multiple_steep_channels_are_repeatable` in the same test module.
-
-Do not obtain steep-channel interval decay by subtracting inclusive fp32
-prefixes: a -1e8 gate can erase following -1 gates from both prefixes. Retain
-individual conditioned log gates and sum only the interval. The `huge_spike`
-pattern covers this in forward, backward, and the beta guard.
-
-Per-group scan ballots need two alternating slots: a mild tile skips the exact
-path's final group barrier, so its next iteration can publish before all warps
-finish reading the previous ballots. The next scan's publication barrier keeps
-each group from advancing two iterations ahead. Keep last-token/norm scratch
-behind the exact path's final barrier. The `alternating` gate pattern exercises
-mild/steep transitions in each scan group on all three schedules.
-
-Count every exact correction writer directly on the K/Q-ready barriers.
-The async-proxy fence orders the issuing thread's accesses, but does not join
-the other lanes that wrote correction rows. Keep the group barrier before
-K-ready publication to protect scratch reuse. FAST retains its original
-elected-lane arrivals and warp-sized counts.
-Join correction readers before an elected lane releases their stage as well.
-
-Choose bounded per-channel scales before backward gradient assembly. Do not
-interpret token logs as prefix exponentials and then reload the accumulators
-to repair those lanes. `gradient_operand_scales` supplies the decay, inverse
-and restore factors; the shared exact correction adds the intra-tile terms.
-
-The exact backward dA and dM writers both arrive on the existing diagonal-ready
-barrier after waiting for its slot to be free. Count both warps directly; avoid
-forwarding one producer's readiness through a separate named barrier. FAST
-keeps the original single-producer count because it does not consume the dM copy.
+Detectors, all in `linear_attention/test_gdn2_steep_decay.py`: `test_fwd_bwd_steep_channel_decay`
+(and its fp16 twin), `test_fp16_inverse_range_without_normalization`,
+`test_multiple_steep_channels_are_repeatable`, `test_forward_state_alias_after_graph_warmup`,
+`test_steep_channel_decay_overwrite_initial_state`, `test_read_only_state_pool_needs_no_snapshot`, `test_strided_state_overwrite` and
+`test_steep_summary_matches_reference`. Scratch bounds are checked by
+`linear_attention/test_gdn2_steep_scratch.py`; `test_steep_schedule_geometry` checks schedule case
+selection across SM counts without changing the kernel launch limits.

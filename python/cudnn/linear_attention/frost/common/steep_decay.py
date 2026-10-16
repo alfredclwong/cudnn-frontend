@@ -38,10 +38,11 @@ twice (``cfg.steep_mode``):
   entry while the flag is 0, so a call without a steep tile pays one empty launch; otherwise the kernel redoes the whole
   launch exactly (pulling tiles off the flag int, past its 1), overwriting every output before the next kernel reads it.
   No host synchronisation is involved, so the pair is safe under CUDA graphs and ``torch.compile``.
-- ``STEEP_INLINE``: one launch with the steep path compiled in, for launches whose output aliases an input they read
-  (``overwrite_initial_state``, ``state_indices``), where the exact launch would read the fast launch's garbage.
+A launch whose output aliases a state it reads (``overwrite_initial_state``, a ``state_indices`` pool, the backward's
+``d_initial_state`` over ``d_final_state``) reads that state from a workspace snapshot (common/state_snapshot.py), so
+the exact launch never reads the fast launch's garbage.
 
-The steep path (``STEEP_EXACT`` / ``STEEP_INLINE``):
+The steep path (``STEEP_EXACT``):
 
 - the gate scan retains individual log2 gates for steep channels on exchange rows ``0 .. BT - 2``;
   the final token's log2 gate goes to a per-channel array. The last exchange row retains ``exp2(prefix)``
@@ -55,8 +56,23 @@ The steep path (``STEEP_EXACT`` / ``STEEP_INLINE``):
   exponent ``g[t] - g[s] <= 0``, minus the products the register MMAs formed with
   their K inv column; the register-MMA warps add the corrections to their
   accumulators;
-- the backward rebuilds a steep channel's dQ / dK / dgate / dbeta lanes from the accumulators and adds the exact
-  intra-tile terms (``steep_grad_corrections``).
+- the backward picks bounded per-channel scales before it assembles gradients (``gradient_operand_scales``), so it
+  never reads token logs as prefix exponentials and repairs those lanes afterwards; ``steep_grad_corrections`` adds the
+  exact intra-tile terms.
+
+Synchronisation invariants of the steep path:
+
+- per-group scan ballots alternate between two slots where a mild tile skips the exact path's final group barrier, so
+  its next iteration can publish before every warp has read the previous ballots; the next scan's publication barrier
+  keeps a group from running two iterations ahead. Last-token and norm scratch stay behind that final barrier. The
+  ``alternating`` gate pattern covers mild/steep transitions in every scan group;
+- every correction writer arrives on the K/Q-ready barriers itself: the async-proxy fence orders only the issuing
+  thread's accesses and does not join the other lanes that wrote correction rows. ``STEEP_FAST`` keeps its original
+  elected-lane arrivals and warp-sized counts. Readers join before an elected lane releases a correction stage;
+- the exact backward's dA and dM writers both arrive on the existing diagonal-ready barrier after waiting for its slot,
+  counted directly. ``STEEP_FAST`` keeps the single-producer count because it does not consume the dM copy;
+- the public summary ops have no overwrite attribute, so their state outputs never alias and their wrappers launch
+  ``STEEP_FAST``.
 """
 
 import dataclasses
@@ -65,7 +81,6 @@ import cutlass
 import cutlass.cute as cute
 import cutlass.experimental.primitives as nvvm
 
-from cudnn.frost.tile_dsl.barrier import launch_dependent_grids
 from cudnn.frost.tile_dsl.pointwise import sigmoid, fp32_to_fp16
 from cudnn.frost.tile_dsl.swizzle import swizzle_xor_128b
 
@@ -90,14 +105,15 @@ STEEP_EXACT: int = 1
 """The exact kernel of a ``STEEP_FAST`` launch: every thread exits on entry unless the flag is raised, else it redoes
 the whole launch with the steep path, pulling tiles from its own ticket."""
 
-STEEP_INLINE: int = 2
-"""One launch with the steep path compiled in, for plans whose outputs alias their inputs (a final state written over
-the initial state), where a second launch would read its own output."""
-
 STEEP_FLAG_SLOT: int = 1
 """The steep flag and the exact launch's ticket share the second int32 of the kernel's scheduler slot, which the
 prologue zeroes with the first: 0 means no steep tile, and the exact launch's tickets start at the 1 the fast launch
 stored."""
+
+
+def has_exact_path(cfg) -> bool:
+    """Whether ``cfg``'s kernel compiles the steep path in (``STEEP_EXACT``; a trace-time constant)."""
+    return cfg.steep_mode != STEEP_FAST
 
 
 def steep_launch_cfg(cfg, launch_idx):
@@ -107,10 +123,12 @@ def steep_launch_cfg(cfg, launch_idx):
 
 @cute.jit
 def steep_exit_unless_flagged(cfg: cutlass.Constexpr, flag_slot):
-    """``STEEP_EXACT`` kernel entry, after the grid-dependency wait: release the next launch (which waits for this grid
-    anyway) and leave unless the fast launch raised the flag."""
+    """``STEEP_EXACT`` kernel entry, after the grid-dependency wait: leave unless the fast launch raised the flag.
+
+    Do not trigger dependents here. An early trigger lets the next persistent kernel's CTAs be dispatched while this
+    grid's CTAs are still being placed, and that kernel then ran about 12% slower (B300, mild gates). Its dependents
+    launch when this grid completes, which they wait for anyway."""
     if cutlass.const_expr(cfg.steep_mode == STEEP_EXACT):
-        launch_dependent_grids()
         if flag_slot[STEEP_FLAG_SLOT] == cutlass.Int32(0):
             nvvm.exit()
 
@@ -183,10 +201,51 @@ def classify_steep_channel(cfg: cutlass.Constexpr, prefix, raw_k_ptr, channel, c
 
 
 @cute.jit
+def encode_gate_exchange(
+    cfg: cutlass.Constexpr,
+    prefix,
+    raw_k_ptr,
+    channel,
+    channel_rows: cutlass.Constexpr,
+    flag_slot,
+    lane_idx,
+    scan_warp,
+    token_logs,
+    values,
+    words_ptr,
+    log_last_ptr,
+    exponentiate: cutlass.Constexpr,
+    channel_active=True,
+):
+    """Classify a channel and encode its exchange registers and scan metadata.
+
+    ``values`` holds log prefixes when ``exponentiate`` is true, otherwise their
+    exponentials. Exact steep channels retain token logs except in the last row,
+    which always holds the state-decay exponential. Callers own exchange stores,
+    stage selection and publication barriers; this helper never synchronizes.
+    """
+    channel_steep, word = classify_steep_channel(cfg, prefix, raw_k_ptr, channel, channel_rows, flag_slot, lane_idx)
+    if cutlass.const_expr(has_exact_path(cfg)):
+        if lane_idx == 0:
+            (words_ptr + scan_warp).store(word)
+        if word != 0:
+            if channel_steep:
+                if channel_active:
+                    (log_last_ptr + channel).store(token_logs[cfg.b_t - 1])
+    for row in cutlass.range_constexpr(cfg.b_t):
+        if cutlass.const_expr(exponentiate):
+            values[row] = cute.math.exp2(values[row], fastmath=True)
+        if cutlass.const_expr(has_exact_path(cfg) and row < cfg.b_t - 1):
+            if channel_steep:
+                values[row] = token_logs[row]
+    return word
+
+
+@cute.jit
 def steep_tile_mask(cfg: cutlass.Constexpr, words_ptr):
     """Read the tile's four scan-warp ballots; FAST never reads exact-path scratch."""
     mask = cutlass.Int32(0)
-    if cutlass.const_expr(cfg.steep_mode != STEEP_FAST):
+    if cutlass.const_expr(has_exact_path(cfg)):
         mask = (words_ptr.load() | (words_ptr + 1).load()) | ((words_ptr + 2).load() | (words_ptr + 3).load())
     return mask
 
@@ -203,6 +262,12 @@ def lane_steep_bits(cfg: cutlass.Constexpr, words_ptr, lane_in_row_group, channe
         word = (words_ptr + first // channel_rows).load()
         bits = bits | (((word >> (first % channel_rows)) & 0xFF) << (dim_half * 8))
     return bits
+
+
+@cute.jit
+def steep_channel_bit(words_ptr, channel, channel_rows: cutlass.Constexpr[int]):
+    """1 if ``channel`` is steep in the ballot words at ``words_ptr`` (one word per scan warp of ``channel_rows`` channels), else 0."""
+    return ((words_ptr + channel // channel_rows).load() >> (channel % channel_rows)) & 1
 
 
 @cute.jit
@@ -227,18 +292,21 @@ def steep_token_log(cfg: cutlass.Constexpr, exchange_ptr, log_last_ptr, row, cha
 def steep_interval_log(cfg: cutlass.Constexpr, exchange_ptr, log_last_ptr, start, end, channel):
     """Sum [start, end) directly: prefix subtraction loses mild gates after large spikes."""
     total = cutlass.Float32(0.0)
-    for token in cutlass.range(cfg.b_t, unroll=1):
-        if token >= start and token < end:
-            total = total + steep_token_log(cfg, exchange_ptr, log_last_ptr, token, channel)
+    for token in cutlass.range(start, end, unroll=1):
+        total = total + steep_token_log(cfg, exchange_ptr, log_last_ptr, token, channel)
     return total
 
 
 @cute.jit
-def steep_operand_scales(cfg: cutlass.Constexpr, row, channel, exchange_ptr, log_last_ptr):
-    """Bounded decay and restore scales from disjoint intervals of token logs."""
-    prefix = steep_interval_log(cfg, exchange_ptr, log_last_ptr, 0, row + 1, channel)
-    suffix = steep_interval_log(cfg, exchange_ptr, log_last_ptr, row + 1, cfg.b_t, channel)
-    return cute.math.exp2(prefix, fastmath=True), cute.math.exp2(suffix, fastmath=True)
+def steep_decay_scale(cfg: cutlass.Constexpr, exchange_ptr, log_last_ptr, row, channel):
+    """A steep channel's K decay / Q decay scale on ``row``, ``exp2(g[row])``, at most 1 (may underflow to zero)."""
+    return cute.math.exp2(steep_interval_log(cfg, exchange_ptr, log_last_ptr, 0, row + 1, channel), fastmath=True)
+
+
+@cute.jit
+def steep_restore_scale(cfg: cutlass.Constexpr, exchange_ptr, log_last_ptr, row, channel):
+    """A steep channel's K inv / K restore scale on ``row``, ``exp2(g[BT - 1] - g[row])``, at most 1."""
+    return cute.math.exp2(steep_interval_log(cfg, exchange_ptr, log_last_ptr, row + 1, cfg.b_t, channel), fastmath=True)
 
 
 @cute.jit
@@ -252,7 +320,8 @@ def gradient_operand_scales(cfg: cutlass.Constexpr, channel_steep, row, channel,
     inverse = cutlass.Float32(0.0)
     restore = cutlass.Float32(0.0)
     if channel_steep != 0:
-        decay, restore = steep_operand_scales(cfg, row, channel, exchange_ptr, log_last_ptr)
+        decay = steep_decay_scale(cfg, exchange_ptr, log_last_ptr, row, channel)
+        restore = steep_restore_scale(cfg, exchange_ptr, log_last_ptr, row, channel)
     else:
         inverse = cute.math.rcp(value, approx=True, ftz=True)
         restore = inverse
@@ -268,16 +337,13 @@ def row_operand_scales(cfg: cutlass.Constexpr, bits, reg_idx, row, channel, valu
     All other channels retain the original operation order and rounding.
     """
     decay = value
-    inverse = cutlass.Float32(0.0)
+    inverse = cute.math.rcp(value, approx=True, ftz=True)
     restore_multiplier = last_value
-    if cutlass.const_expr(cfg.steep_mode != STEEP_FAST):
+    if cutlass.const_expr(has_exact_path(cfg)):
         if ((bits >> reg_idx) & 1) != 0:
-            decay, inverse = steep_operand_scales(cfg, row, channel, exchange_ptr, log_last_ptr)
+            decay = steep_decay_scale(cfg, exchange_ptr, log_last_ptr, row, channel)
+            inverse = steep_restore_scale(cfg, exchange_ptr, log_last_ptr, row, channel)
             restore_multiplier = cutlass.Float32(1.0)
-        else:
-            inverse = cute.math.rcp(value, approx=True, ftz=True)
-    else:
-        inverse = cute.math.rcp(value, approx=True, ftz=True)
     return decay, inverse, restore_multiplier
 
 
@@ -315,30 +381,38 @@ def steep_row_corrections(
     using the stored K decay / Q decay / K inv values for the second terms. The correction does not duplicate
     operand rounding. The row-stage barrier must make all operand rows visible before this call."""
     with_a = cutlass.const_expr(raw_q_ptr is not None)
-    # All four row groups traverse the same columns so the warp shuffles
-    # reconverge even when the rows have different causal extents.
-    for source_row in cutlass.range(cfg.b_t, unroll=1):
-        kk = cutlass.Float32(0.0)
-        attn = cutlass.Float32(0.0)
-        if source_row <= row:
-            for j in cutlass.range(cfg.d_k // 64 * 8, unroll=1):
-                if ((bits >> j) & 1) != 0:
-                    channel = (j // 8) * 64 + lane_in_row_group * 8 + (j % 8)
-                    interval = steep_interval_log(cfg, exchange_ptr, log_last_ptr, source_row + 1, row + 1, channel)
+    kk_regs = cutlass.Array(cutlass.Float32, cfg.b_t)
+    attn_regs = cutlass.Array(cutlass.Float32, cfg.b_t)
+    for source_row in cutlass.range_constexpr(cfg.b_t):
+        kk_regs[source_row] = cutlass.Float32(0.0)
+        attn_regs[source_row] = cutlass.Float32(0.0)
+    for j in cutlass.range(cfg.d_k // 64 * 8, unroll=1):
+        if ((bits >> j) & 1) != 0:
+            channel = (j // 8) * 64 + lane_in_row_group * 8 + (j % 8)
+            x = ((raw_k_ptr + raw_offset(cfg, row, channel)).load().to(cutlass.Float32) * k_norm) * steep_beta(cfg, beta_ptr, row, channel)
+            x_decay = (k_decay_ptr + raw_offset(cfg, row, channel)).load().to(cutlass.Float32)
+            if cutlass.const_expr(with_a):
+                z = (raw_q_ptr + raw_offset(cfg, row, channel)).load().to(cutlass.Float32) * q_scale
+                z_decay = (q_decay_ptr + raw_offset(cfg, row, channel)).load().to(cutlass.Float32)
+            interval = cutlass.Float32(0.0)
+            # Grow an interval backward from its destination. Never subtract prefixes.
+            for step in cutlass.range_constexpr(cfg.b_t):
+                source_row = cfg.b_t - 1 - step
+                if source_row <= row:
+                    if source_row < row:
+                        interval = interval + steep_token_log(cfg, exchange_ptr, log_last_ptr, source_row + 1, channel)
                     k_s = (raw_k_ptr + raw_offset(cfg, source_row, channel)).load().to(cutlass.Float32)
                     if cutlass.const_expr(k_norm_ptr is not None):
                         k_s = k_s * (k_norm_ptr + source_row).load()
                     k_inv_s = (k_inv_ptr + raw_offset(cfg, source_row, channel)).load().to(cutlass.Float32)
                     k_decayed = k_s * cute.math.exp2(interval, fastmath=True)
                     if source_row < row:
-                        x = ((raw_k_ptr + raw_offset(cfg, row, channel)).load().to(cutlass.Float32) * k_norm) * steep_beta(cfg, beta_ptr, row, channel)
-                        x_decay = (k_decay_ptr + raw_offset(cfg, row, channel)).load().to(cutlass.Float32)
-                        kk = kk + (x * k_decayed - x_decay * k_inv_s)
+                        kk_regs[source_row] = kk_regs[source_row] + (x * k_decayed - x_decay * k_inv_s)
                     if cutlass.const_expr(with_a):
-                        z = (raw_q_ptr + raw_offset(cfg, row, channel)).load().to(cutlass.Float32) * q_scale
-                        z_decay = (q_decay_ptr + raw_offset(cfg, row, channel)).load().to(cutlass.Float32)
-                        attn = attn + (z * k_decayed - z_decay * k_inv_s)
-        # One fixed tree per eight-lane row group; one writer per entry.
+                        attn_regs[source_row] = attn_regs[source_row] + (z * k_decayed - z_decay * k_inv_s)
+    for source_row in cutlass.range_constexpr(cfg.b_t):
+        kk = kk_regs[source_row]
+        attn = attn_regs[source_row]
         for step in cutlass.range_constexpr(3):
             distance = 4 >> step
             kk = kk + cutlass.Float32(nvvm.shfl_sync(0xFFFFFFFF, kk, distance, 31, kind=nvvm.Shfl.BFLY))
@@ -412,7 +486,7 @@ def steep_grad_corrections(
                 da = (dadm_ptr + s * cfg.b_t + t).load().to(cutlass.Float32)
                 dm = (dadm_ptr + tile + s * cfg.b_t + t).load().to(cutlass.Float32)
                 dk_inv = dk_inv + ((q_s * scale) * da - (k_s * steep_beta(cfg, beta_ptr, s, channel)) * dm) * decay
-    exp_t, _ = steep_operand_scales(cfg, t, channel, exchange_ptr, log_last_ptr)
+    exp_t = steep_decay_scale(cfg, exchange_ptr, log_last_ptr, t, channel)
     k_t = (raw_k_ptr + raw_offset(cfg, t, channel)).load().to(cutlass.Float32)
     if cutlass.const_expr(cfg.l2norm):
         k_t = k_t * (k_norm_ptr + t).load()
@@ -420,12 +494,6 @@ def steep_grad_corrections(
     dq_delta = scale * (dq_attn - exp_t * dq_mma)
     dkd_delta = exp_t * dkd_mma - dkd_attn
     return dq_delta, dk_inv, k_t * dkd_delta, beta_t * dkd_delta
-
-
-@cute.jit
-def steep_restore_scale(cfg: cutlass.Constexpr, exchange_ptr, log_last_ptr, row, channel):
-    """A steep channel's K inv / K restore scale on ``row``, ``exp2(g[BT - 1] - g[row])``, at most 1."""
-    return cute.math.exp2(steep_interval_log(cfg, exchange_ptr, log_last_ptr, row + 1, cfg.b_t, channel), fastmath=True)
 
 
 @cute.jit
@@ -438,33 +506,23 @@ def store_steep_beta(cfg: cutlass.Constexpr, bits, beta_regs, beta_ptr, row, lan
 
 
 @cute.jit
-def restore_steep_dstate(cfg: cutlass.Constexpr, row_lo_addr, acc_col, input_col, first_channel, words_ptr, scale_ptr):
-    """Store backward carry with steep channels undecayed: K inv already carries their decay.
+def pack_dstate_operand(cfg: cutlass.Constexpr, original, decayed, first_channel, words_ptr, steep_any, width: cutlass.Constexpr[int] = 32):
+    """Pack a state fragment. Steep channels use the original because K inv carries their decay.
 
-    Both backward schedules call after publishing the ordinary decayed operand.
-    Keep the accumulator read, conversion and store order identical in each.
+    Both inputs are already in registers. Leave the decayed FP32 accumulator
+    unchanged and let the caller publish the packed operand under its barriers.
+    Seeds use 16 channels. Later carries use 32 channels.
     """
-    steep_rows = cutlass.const_expr(cfg.d_k // len(cfg.compute_group_0_warp_ids))
-    for half in cutlass.range_constexpr(2):
-        steep_vec = nvvm.tcgen05_ld(
-            "32x32b",
-            nvvm.make_tmem_ptr(row_lo_addr + (acc_col + half * 16), cutlass.Float32),
-            num=16,
-        )
-        nvvm.tcgen05_wait("load")
-        steep_pack = cutlass.Array(cutlass.Int32, 8, alignment=16)
-        for pc in cutlass.range_constexpr(8):
-            col0 = first_channel + half * 16 + 2 * pc
-            value0 = steep_vec[2 * pc]
-            value1 = steep_vec[2 * pc + 1]
-            if (((words_ptr + col0 // steep_rows).load() >> (col0 % steep_rows)) & 1) == 0:
-                value0 = value0 * (scale_ptr + col0).load()
-            if (((words_ptr + (col0 + 1) // steep_rows).load() >> ((col0 + 1) % steep_rows)) & 1) == 0:
-                value1 = value1 * (scale_ptr + col0 + 1).load()
-            steep_pack[pc] = fp32_to_fp16(value0, value1, dtype=cfg.io_dtype)
-        nvvm.tcgen05_wait("store")
-        nvvm.tcgen05_st(
-            "32x32b",
-            nvvm.make_tmem_ptr(row_lo_addr + (input_col + half * 8), cutlass.Int8),
-            steep_pack[0:8],
-        )
+    operand = cutlass.Array(cutlass.Float32, width, alignment=16)
+    for channel in cutlass.range_constexpr(width):
+        operand[channel] = decayed[channel]
+    if cutlass.const_expr(has_exact_path(cfg)):
+        if steep_any != 0:
+            steep_rows = cutlass.const_expr(cfg.d_k // len(cfg.compute_group_0_warp_ids))
+            for channel in cutlass.range_constexpr(width):
+                if steep_channel_bit(words_ptr, first_channel + channel, steep_rows) != 0:
+                    operand[channel] = original[channel]
+    packed = cutlass.Array(cutlass.Int32, width // 2, alignment=16)
+    for pc in cutlass.range_constexpr(width // 2):
+        packed[pc] = fp32_to_fp16(operand[2 * pc], operand[2 * pc + 1], dtype=cfg.io_dtype)
+    return packed

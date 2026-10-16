@@ -43,6 +43,12 @@ pytest fe_api/gemm/          # OSS kernel tests
 
 ### Conventions for new tests
 
+- Coverage-shape selectors raise when they cannot select the requested schedule.
+  Only the device-dependent fixture may convert that error into a skip.
+  Fixed supported-device geometry tests must fail if a schedule becomes unavailable.
+  `linear_attention/test_gdn2_steep_decay.py::test_steep_schedule_geometry_rejects_missing_schedule`
+  disables DV splitting to check this boundary.
+
 - Mark with a level (`@pytest.mark.L0` ... `L4`): L0 must stay fast (default CI smoke); big parameter sweeps go to higher levels.
 - **Check for a module-level `pytestmark` before adding per-test markers.** Many files apply a level or capability marker file-wide (`pytestmark = ...` near the top); duplicating it on each test is noise, and suggesting it in review wastes a round-trip (recurred on PRs #814, #811, #797).
 - Gate on capability, don't assume it: skip via `check_support()` failures, `cudnn.backend_version()`, and `torch.cuda.get_device_capability()`.

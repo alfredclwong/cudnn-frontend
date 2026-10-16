@@ -33,7 +33,7 @@ from cutlass.cute.runtime import from_dlpack
 
 from ..common import split_k
 from ..common.host import get_dtype
-from ..common.steep_decay import STEEP_FAST, STEEP_INLINE
+from ..common.state_snapshot import snapshot_states
 from . import gdn2_prefill_f16, gdn2_prep_f16, gdn2_prep_prefill_f16
 
 warmup_forward_cache = {}
@@ -106,8 +106,14 @@ def warmup_forward_host(
     prep_words: Optional[cute.Tensor],
     prep_rows: Optional[cute.Tensor],
     prep_row_count: Optional[cute.Tensor],
+    state_snapshot: Optional[cute.Tensor],
     stream: cuda.CUstream,
 ) -> None:
+    seed_state, seed_rows = state_in, seed_indices
+    if cutlass.const_expr(state_snapshot is not None):
+        # Both launches read the original seeds even when the final state aliases them.
+        snapshot_states(state_in, state_snapshot, seed_indices, stream)
+        seed_state, seed_rows = state_snapshot, None
     if cutlass.const_expr(split):
         split_k.launch(
             split,
@@ -228,10 +234,10 @@ def warmup_forward_host(
         beta_prefill,
         w,
         cu_seqlens,
-        state_in,
+        seed_state,
         o,
         state_out,
-        seed_indices,
+        seed_rows,
         final_indices,
         work_items,
         work_count,
@@ -292,7 +298,7 @@ def build_warmup_forward(
     prep_words=None,
     prep_rows=None,
     prep_row_count=None,
-    overwrite_initial_state=False,
+    state_snapshot=None,
 ):
     """Compile (cached per static config: dtypes, heads, dims, gate flags and bound, the split-K geometry, the d_v split, state and
     checkpoint presence, device) the warmup or uncut forward launch over the buffers of one plan.  The placeholders repeat
@@ -321,8 +327,6 @@ def build_warmup_forward(
     io_dtype = get_dtype(q.dtype)
     gate_dtype = get_dtype(gate.dtype)
     state_src = state_in if state_in is not None else state_out
-    # Bind replay safety to the graph contract, which survives buffer rebinding.
-    aliased = overwrite_initial_state or seed_indices is not None
     state_dtype = get_dtype(state_src.dtype) if state_src is not None else cutlass.Float32
     key = (
         str(q.dtype),
@@ -354,7 +358,7 @@ def build_warmup_forward(
         int(checkpoint_every_n_tokens) > 0,
         int(tiles_per_head),
         bool(prep),
-        aliased,
+        state_snapshot is not None,
     )
     if key not in warmup_forward_cache:
         prefill_module = gdn2_prep_prefill_f16 if prep else gdn2_prefill_f16
@@ -376,7 +380,6 @@ def build_warmup_forward(
             d_k=DK,
             d_v=DV // tiles_per_head,
             tiles_per_head=tiles_per_head,
-            **({} if prep else {"steep_mode": STEEP_INLINE if aliased else STEEP_FAST}),
         )
         prep_cfg = None
         if prep:
@@ -486,6 +489,7 @@ def build_warmup_forward(
             bool(prep),
             prep_cfg,
             *prep_placeholders,
+            from_dlpack(state_snapshot, assumed_align=16).mark_layout_dynamic(leading_dim=3) if state_snapshot is not None else None,
             cuda.CUstream(int(stream)),
             options="--enable-tvm-ffi --opt-level 2",
         )
@@ -528,6 +532,7 @@ def run_warmup_forward(
     prep_words=None,
     prep_rows=None,
     prep_row_count=None,
+    state_snapshot=None,
 ) -> None:
     """Replay the warmup or uncut forward: one crossing into the DSL for the table, prologue and prefill launches.  The
     plan validated the contract at build, so nothing here raises."""
@@ -580,5 +585,6 @@ def run_warmup_forward(
         prep_words,
         prep_rows,
         prep_row_count,
+        state_snapshot,
         cuda.CUstream(int(stream)),
     )

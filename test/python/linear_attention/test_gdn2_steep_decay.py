@@ -30,6 +30,7 @@ from .test_la import (
     random_state,
     reference,
     run_fwd,
+    state_pool,
 )
 
 pytestmark = [pytest.mark.L0, pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")]
@@ -42,6 +43,34 @@ def backend():
         yield Backend("frost")
     finally:
         clear_caches()
+
+
+@pytest.fixture
+def built_plans(monkeypatch, backend):
+    from cudnn.linear_attention.frost import gdn2_engine
+
+    build = gdn2_engine.build_gdn2
+    plans = []
+
+    def record(graph):
+        plan = build(graph)
+        plans.append(plan)
+        return plan
+
+    monkeypatch.setattr(gdn2_engine, "build_gdn2", record)
+    return plans
+
+
+def assert_schedules(plans, shape):
+    """Verify coverage against the constructed plans, including the backward's earlier chain threshold."""
+    assert {plan.node.node_type.name for plan in plans} == {"GDN2", "GDN2_BWD"}
+    for plan in plans:
+        if plan.node.node_type.name == "GDN2":
+            assert plan.chain == (shape == "chain"), f"{shape}: forward chain={plan.chain}"
+            assert plan.prep == (shape == "prep"), f"{shape}: forward prep={plan.prep}"
+            assert plan.dv_split == (shape == "prep"), f"{shape}: forward dv_split={plan.dv_split}"
+        else:
+            assert plan.chain == (shape != "uncut"), f"{shape}: backward chain={plan.chain}"
 
 
 def steep_gate(case, pattern):
@@ -83,23 +112,71 @@ def steep_gate(case, pattern):
 
 
 STEEP_PATTERNS = ("steady", "spike", "huge_spike", "two_spikes", "offset_window", "extreme", "all_channels", "alternating")
-STEEP_SHAPES = {  # the schedules the engine picks on a 148-SM part: the d_v-split prep path, the uncut prefill, the piece chain
+STEEP_SHAPES = {  # token geometry; steep_shape selects heads for the actual device
     "prep": dict(seq_lens=[517, 0, 91, 128, 1]),
     "uncut": dict(seq_lens=[96, 32, 160, 1]),
     "chain": dict(seq_lens=[2048]),
 }
 
 
+def steep_shape(shape, num_sm):
+    """Pick head counts that exercise the named schedules, including on small GPU partitions."""
+    from cudnn.linear_attention.frost.common.piece_chain import choose_pieces, is_dv_split
+    from cudnn.linear_attention.frost.gdn2_engine import PREP_TILE_FRACTION
+
+    lengths = STEEP_SHAPES[shape]["seq_lens"]
+    for heads in (2, 1):
+        geometry = dict(num_seqs=len(lengths), heads_out=heads, num_sm=num_sm, total_tokens=sum(lengths), b_t=16, expand_num=1)
+        pieces, units = choose_pieces(**geometry, cadence_tokens=0, batch_invariant=False)
+        reverse, _ = choose_pieces(**geometry, cadence_tokens=0, batch_invariant=False, reverse=True)
+        split = not pieces and is_dv_split(**geometry, dim_v=128, unit_chunks=units)
+        prep = split and len(lengths) * heads <= int(PREP_TILE_FRACTION * num_sm)
+        if (bool(pieces), bool(split), bool(prep), bool(reverse)) == (
+            shape == "chain",
+            shape == "prep",
+            shape == "prep",
+            shape != "uncut",
+        ):
+            return dict(seq_lens=lengths, H=heads)
+    raise ValueError(f"{num_sm} SMs cannot exercise the {shape} forward/backward schedules")
+
+
+@pytest.fixture
+def schedule_shape(shape):
+    num_sm = torch.cuda.get_device_properties(torch.cuda.current_device()).multi_processor_count
+    try:
+        return steep_shape(shape, num_sm)
+    except ValueError as error:
+        pytest.skip(str(error))
+
+
+@pytest.mark.parametrize("num_sm", [16, 24, 132, 148, 152, 192])
+@pytest.mark.parametrize("shape", list(STEEP_SHAPES))
+def test_steep_schedule_geometry(shape, num_sm):
+    # The 16-SM case needs fewer heads for prep; larger devices keep the original workload.
+    geometry = steep_shape(shape, num_sm)
+    assert geometry["H"] == (1 if shape == "prep" and num_sm < 24 else 2)
+
+
+def test_steep_schedule_geometry_rejects_missing_schedule(monkeypatch):
+    from cudnn.linear_attention.frost.common import piece_chain
+
+    monkeypatch.setattr(piece_chain, "is_dv_split", lambda **geometry: False)
+    with pytest.raises(ValueError, match="148 SMs cannot exercise the prep"):
+        steep_shape("prep", 148)
+
+
 @pytest.mark.parametrize("K", [64, 128])
 @pytest.mark.parametrize("shape", list(STEEP_SHAPES))
 @pytest.mark.parametrize("pattern", STEEP_PATTERNS)
 @pytest.mark.parametrize("variant", ("gdn2",))
-def test_fwd_bwd_steep_channel_decay(backend, variant, pattern, shape, K):
+def test_fwd_bwd_steep_channel_decay(backend, built_plans, variant, pattern, shape, K, schedule_shape):
     """Per-channel log-decay far past the 16-token tile's exp2 range: the forward output and every gradient stay
     finite and match the fp64 reference (a tile sum of g below -126 * ln 2 = -87.3 used to return NaN for the
     rest of the sequence)."""
-    case = steep_gate(make_case(variant, torch.bfloat16, K=K, **STEEP_SHAPES[shape]), pattern)
+    case = steep_gate(make_case(variant, torch.bfloat16, K=K, **schedule_shape), pattern)
     assert_bwd_parity(backend, case, l2norm=True)
+    assert_schedules(built_plans, shape)
 
 
 @pytest.mark.parametrize("variant", ("gdn2",))
@@ -143,17 +220,18 @@ def test_steep_channel_decay_beta_guard(backend, variant, pattern):
 @pytest.mark.parametrize("K", [64, 128])
 @pytest.mark.parametrize("shape", list(STEEP_SHAPES))
 @pytest.mark.parametrize("variant", ("gdn2",))
-def test_fwd_bwd_steep_channel_decay_fp16(backend, variant, shape, K):
+def test_fwd_bwd_steep_channel_decay_fp16(backend, built_plans, variant, shape, K, schedule_shape):
     """fp16 operands overflow much sooner: K inv = k * 2^-g passes the fp16 maximum once a tile's log-decay sums
     below about -11, which an alpha of 0.3 per token reaches."""
-    case = steep_gate(make_case(variant, torch.float16, K=K, lo=0.3, **STEEP_SHAPES[shape]), "steady")
+    case = steep_gate(make_case(variant, torch.float16, K=K, lo=0.3, **schedule_shape), "steady")
     assert_bwd_parity(backend, case, l2norm=True)
+    assert_schedules(built_plans, shape)
 
 
 @pytest.mark.parametrize("variant", ("gdn2",))
 def test_steep_channel_decay_overwrite_initial_state(backend, variant):
-    """An aliased state (``overwrite_initial_state``) cannot take the exact relaunch, so its kernels compile the steep
-    path inline: output, final state and every gradient bitwise the separate-buffer run's, which takes the relaunch."""
+    """An aliased state (``overwrite_initial_state``) is read from a snapshot, so the exact relaunch still sees the
+    original: output, final state and every gradient bitwise the separate-buffer run's."""
     case = steep_gate(make_case(variant, torch.bfloat16, B=8, T=512, H=4), "spike")
     state0, d_final = random_state(case), random_state(case, scale=0.1, seed=SEED + 3)
     o_ref, fs_ref = run_fwd(backend, case, initial_state=state0.clone(), output_final_state=True, batch_invariant=True)
@@ -196,6 +274,44 @@ def test_steep_channel_decay_overwrite_initial_state(backend, variant):
 
 
 @pytest.mark.parametrize("K", [64, 128])
+@pytest.mark.parametrize("steep", [False, True])
+def test_read_only_state_pool_needs_no_snapshot(backend, built_plans, K, steep):
+    """An indexed input pool without a final-state output stays unchanged and needs no seed snapshot."""
+    case = make_case("gdn2", torch.bfloat16, B=8, T=64, H=4, K=K)
+    if steep:
+        case = steep_gate(case, "spike")
+    state0 = random_state(case)
+    o_ref, _ = run_fwd(backend, case, initial_state=state0, output_final_state=False, batch_invariant=True)
+    pool, slots, _ = state_pool(case, state0, padded=True)
+    pool_before = pool.clone()
+    o, final_state = run_fwd(backend, case, initial_state=pool, state_indices=slots, output_final_state=False, batch_invariant=True)
+    assert final_state.numel() == 0
+    assert_bitwise("output", o, o_ref)
+    assert_bitwise("read-only pool", pool, pool_before)
+    indexed_plans = [plan for plan in built_plans if "state_indices" in plan.node.inputs]
+    assert indexed_plans
+    for plan in indexed_plans:
+        assert not plan.chain and not plan.prep and not plan.has_final_state
+        assert "state_snapshot" not in plan.carve_names
+
+
+@pytest.mark.parametrize("K", [64, 128])
+def test_strided_state_overwrite(backend, K):
+    """The snapshot follows the state's strides: a padded ``initial_state`` overwritten in place matches the
+    separate-buffer run bitwise through a steep relaunch, and its padding is untouched."""
+    case = steep_gate(make_case("gdn2", torch.bfloat16, K=K, seq_lens=[96, 32, 160, 1]), "spike")
+    state0 = random_state(case)
+    o_ref, fs_ref = run_fwd(backend, case, initial_state=state0.clone(), output_final_state=True, batch_invariant=True)
+    padded = torch.full((case.N, case.HO, case.V, K + 16), 7.0, device="cuda")
+    state = padded[..., :K]
+    state.copy_(state0)
+    o, _ = run_fwd(backend, case, initial_state=state, output_final_state=True, overwrite_initial_state=True)
+    assert_bitwise("o", o, o_ref)
+    assert_bitwise("final_state", state, fs_ref)
+    assert torch.equal(padded[..., K:], torch.full_like(padded[..., K:], 7.0))
+
+
+@pytest.mark.parametrize("K", [64, 128])
 def test_fp16_inverse_range_without_normalization(backend, K):
     """A moderate prefix can overflow K inv when unnormalized keys exceed one."""
     case = make_case("gdn2", torch.float16, T=32, K=K, H=2)
@@ -213,9 +329,9 @@ def test_fp16_inverse_range_without_normalization(backend, K):
 
 @pytest.mark.parametrize("K", [64, 128])
 @pytest.mark.parametrize("shape", list(STEEP_SHAPES))
-def test_multiple_steep_channels_are_repeatable(backend, K, shape):
+def test_multiple_steep_channels_are_repeatable(backend, built_plans, K, shape, schedule_shape):
     """The correction reduction has a fixed order in forward and backward."""
-    case = steep_gate(make_case("gdn2", torch.bfloat16, K=K, **STEEP_SHAPES[shape]), "all_channels")
+    case = steep_gate(make_case("gdn2", torch.bfloat16, K=K, **schedule_shape), "all_channels")
     state0 = random_state(case)
     d_final = random_state(case, seed=SEED + 3)
     o_ref, fs_ref, grads_ref, dO, _ = chain_grads(backend, case, initial_state=state0, d_final_state=d_final)
@@ -225,6 +341,7 @@ def test_multiple_steep_channels_are_repeatable(backend, K, shape):
         assert_bitwise("final_state", fs, fs_ref)
         for name in grads_ref:
             assert_bitwise(name, grads[name], grads_ref[name])
+    assert_schedules(built_plans, shape)
 
 
 @pytest.mark.parametrize("K", [64, 128])
