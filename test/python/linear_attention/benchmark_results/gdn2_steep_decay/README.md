@@ -36,4 +36,24 @@ The counter is not a tile or steep-channel count. Reads occur outside timing.
 - Recorded harness SHA256: `dcc4d3ff87475457b5f368e3e3a89bc961fcbd11cf79a1225924f5687cc0fd0e`.
 
 These are small synthetic mechanism checks. They do not establish model convergence, application throughput,
-other architectures, or correctness across the full upstream regression suite. The PR remains in draft for broader qualification.
+other architectures, or correctness across the full repository test suite.
+
+## Upstream correctness qualification
+
+On one B300 in the same public container, the requested upstream selections passed at commit `3431faaefece047c9fd69472e11749965cf28eb1`:
+
+| Selection | Passed | Failed / errors / skipped | Time |
+| --- | ---: | --- | ---: |
+| Complete steep-decay and scratch modules | 185 | 0 / 0 / 0 | 1,076.49 s |
+| GDN-2 FROST overwrite and state-index selection | 12 | 0 / 0 / 0 | 109.76 s |
+
+The state command deselected 6,184 unrelated cases. Both processes and the single-GPU job exited with status zero.
+Both logs contain a PyTorch warning that `PYTORCH_CUDA_ALLOC_CONF` is deprecated in favor of `PYTORCH_ALLOC_CONF`.
+No test source, numerical tolerance, or runtime kernel was changed for this qualification.
+The test configuration overlays the checked-out Python source. Its helper hash matched the installed patched helper.
+
+See [the commands](../../benchmark_gdn2_steep_decay.md#upstream-correctness-tests),
+[qualification metadata](correctness/summary.json),
+[steep/scratch log](correctness/steep-scratch.log), and [state log](correctness/state.log).
+The adjacent JUnit XML files, dependency list, and source hashes retain the supporting evidence.
+These results cover the stated selections, not the entire repository or other GPU architectures.

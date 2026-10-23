@@ -1,0 +1,3 @@
+4c190513315d6262b7e06dfb3126f98320ba6387bccd7e2e0c1e50f934f0b1f4  /mnt/data/scratch_alfred/cudnn1816-independent/correctness-source.tar.gz
+5ec675e44aa058549dd9900a203aa64d4f2ee70f1bdd648ed7789383e981a581  /mnt/data/scratch_alfred/cudnn1816-independent/correctness-106032/source/python/cudnn/linear_attention/frost/common/steep_decay.py
+5ec675e44aa058549dd9900a203aa64d4f2ee70f1bdd648ed7789383e981a581  /mnt/data/scratch_alfred/cudnn1816-independent/run-105848/patch/cudnn/linear_attention/frost/common/steep_decay.py

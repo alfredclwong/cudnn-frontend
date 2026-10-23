@@ -1,0 +1,44 @@
+{
+  "source_commit": "3431faaefece047c9fd69472e11749965cf28eb1",
+  "container": "nvcr.io/nvidia/pytorch:25.10-py3",
+  "gpu": "NVIDIA B300 SXM6 PC",
+  "gpu_count": 1,
+  "slurm_job_id": 106032,
+  "job_exit_code": 0,
+  "source_archive_sha256": "4c190513315d6262b7e06dfb3126f98320ba6387bccd7e2e0c1e50f934f0b1f4",
+  "helper_sha256": "5ec675e44aa058549dd9900a203aa64d4f2ee70f1bdd648ed7789383e981a581",
+  "suites": {
+    "steep-scratch": {
+      "tests": 185,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "exit_code": 0,
+      "junit_seconds": 1075.109,
+      "pytest_summary_seconds": 1076.49
+    },
+    "state": {
+      "tests": 12,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "exit_code": 0,
+      "deselected": 6184,
+      "junit_seconds": 109.574,
+      "pytest_summary_seconds": 109.76
+    }
+  },
+  "warnings": [
+    "Both pytest processes emitted the PyTorch PYTORCH_CUDA_ALLOC_CONF deprecation warning at shutdown."
+  ],
+  "commands": [
+    "python -m pytest -n 0 -m '' linear_attention/test_gdn2_frost_steep_decay.py linear_attention/test_gdn2_frost_steep_scratch.py -ra",
+    "python -m pytest -n 0 -m '' linear_attention/test_la.py -k 'gdn2 and frost and (overwrite or state_indices)' -ra"
+  ],
+  "report_sha256": {
+    "state.log": "9e37393397475f4be8cf2eb0d95a13bf606fcd07262318deeda10c8cc85dec42",
+    "state.xml": "001e576a0b47c73a9ea16db8a98e395bb2c0eae6b8457f3544bd3d5eb74625b9",
+    "steep-scratch.log": "e799979c68d9e184df0776cbbba433c0842b3be97feffdd33fb00c254819aa39",
+    "steep-scratch.xml": "4ffe1730dd9e504d10d3db362d059fb4f137724a61ce59102a65572dcecec106"
+  }
+}

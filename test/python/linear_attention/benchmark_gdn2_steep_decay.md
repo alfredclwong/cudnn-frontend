@@ -94,3 +94,23 @@ The raw ABBA records and a compact summary are in `benchmark_results/gdn2_steep_
 The kernel revisions are upstream base `f2aa360e5a08436651d158cfad26b05b7db5ab92` and patch `ab9a46584daa6f3e134c7b1bf4b1074ca453710e`.
 Later commits in this PR update the standalone harness and documentation only.
 See the results README for measured values, provenance, and limitations.
+
+## Upstream correctness tests
+
+Use the public environment above and the patched runtime. Install the public test dependencies:
+
+```bash
+python -m pip install pytest pytest-xdist looseversion
+export PYTHONPATH="$REPRO_DIR/patch"
+cd test/python
+python -m pytest -n 0 -m '' \
+  linear_attention/test_gdn2_frost_steep_decay.py \
+  linear_attention/test_gdn2_frost_steep_scratch.py -ra
+python -m pytest -n 0 -m '' linear_attention/test_la.py \
+  -k 'gdn2 and frost and (overwrite or state_indices)' -ra
+```
+
+The empty marker expression disables the default smoke-level filter.
+The linear-attention test configuration overlays this checkout's Python source onto the installed package.
+Use the exact PR checkout and verify its helper hash matches the patched runtime before testing.
+Run these commands sequentially on one GPU. Read pytest's full summary and exit status, including skips and errors.
