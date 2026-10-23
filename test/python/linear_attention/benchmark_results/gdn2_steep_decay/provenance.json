@@ -1,0 +1,14 @@
+{
+  "container": "nvcr.io/nvidia/pytorch:25.10-py3",
+  "base_commit": "f2aa360e5a08436651d158cfad26b05b7db5ab92",
+  "patch_commit": "ab9a46584daa6f3e134c7b1bf4b1074ca453710e",
+  "changed_runtime_files": [
+    "cudnn/linear_attention/frost/common/steep_decay.py"
+  ],
+  "runtime_file_count": 1175,
+  "base_helper_sha256": "587d93596167f83f3e879b9d1bd7f77d3a70a734a827dc73e7b7a513022f0e07",
+  "patch_helper_sha256": "5ec675e44aa058549dd9900a203aa64d4f2ee70f1bdd648ed7789383e981a581",
+  "wheel_sha256": {
+    "nvidia_cudnn_frontend-1.32.0-cp312-cp312-linux_x86_64.whl": "e6a67519b7616d7db6ca06835b20267144166f7ba8a07ecc4f3c7e6f285855d3"
+  }
+}

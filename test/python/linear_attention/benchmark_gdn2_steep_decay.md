@@ -1,0 +1,96 @@
+# Standalone GDN-2 steep-decay reproduction
+
+This benchmark needs one supported Blackwell GPU, PyTorch, and public cuDNN Frontend dependencies.
+It generates every input from seed 7082. It needs no model, checkpoint, dataset, application package, or distributed runtime.
+
+## Workload and checks
+
+The smallest case is one full tile: 16 tokens, one head, and key/value dimensions of 64.
+A 256-token case checks the effect across more tiles. Each size tests 0, 1, and 64 steep channels.
+Q/K are normalized random vectors. Q/K/V and erase/write gates use BF16; log gates use FP32.
+Mild log gates are -0.02; selected steep channels use -6. Erase and write gates are 0.5.
+
+Each case checks the output and all six gradients against a CPU FP64 recurrence, using the exact quantized inputs.
+The relative Frobenius tolerance is 1%. Failures cause a nonzero exit after errors are saved.
+The reference retains only these small workloads; this is not a large-shape training benchmark.
+
+An untimed diagnostic reads the backward scheduler while its workspace is still owned by the call.
+The second scheduler integer is the exact-path flag/ticket counter. Mild cases must leave it at zero; steep cases must advance it above one.
+This proves correction work executes, rather than merely observing an extra kernel launch. The counter does not count steep channels or tiles.
+The observer temporarily wraps internal plan methods, restores them before timing, and is intended for this single-process developer script only.
+
+Five warmups precede 30 eager CUDA-event samples. These intervals include host enqueue gaps.
+Five profiler samples each execute ten calls. GPU busy time merges overlapping GPU intervals and excludes idle gaps.
+Profiler overhead is present in both variants. These timings do not establish end-to-end throughput gains.
+Numerical checks and scheduler reads are outside both measurements. No CUDA graph capture is required.
+
+## Public environment and ABBA procedure
+
+The measured environment used `nvcr.io/nvidia/pytorch:25.10-py3`, PyTorch `2.9.0a0+145a3a7bda.nv25.10`, CUDA 13.0,
+CuTeDSL 4.7.0, cuDNN 9.27.0.42, and one B300 (SM 10.3, driver 580.173.02).
+The engine requires CuTeDSL 4.7.0 even though the package metadata permits a lower version.
+Build requirements include nanobind and Ninja; install them explicitly when disabling build isolation.
+
+Start from a clean checkout of this PR. For example:
+
+```bash
+git clone https://github.com/NVIDIA/cudnn-frontend.git
+cd cudnn-frontend
+git fetch origin pull/1816/head
+git checkout --detach FETCH_HEAD
+docker run --rm -it --gpus device=0 --ipc=host \
+  -v "$PWD:/work" -w /work nvcr.io/nvidia/pytorch:25.10-py3 bash
+```
+
+Inside the public container, build one wheel and create two runtime copies.
+The base copy restores the helper from the exact upstream base commit.
+The compiled extension and all other runtime files therefore remain identical.
+Use a fresh output directory for each experiment:
+
+```bash
+set -euo pipefail
+unset PYTHONPATH PIP_CONSTRAINT
+REPRO_DIR=$(mktemp -d /tmp/gdn2-steep.XXXXXX)
+export REPRO_DIR
+python -m venv --system-site-packages "$REPRO_DIR/venv"
+export PATH="$REPRO_DIR/venv/bin:$PATH"
+python -m pip install \
+  'nvidia-cutlass-dsl[cu13]==4.7.0' 'apache-tvm-ffi==0.1.11' \
+  'nvidia-cudnn-cu13==9.27.0.42' 'nanobind==3.1.0' \
+  'ninja==1.11.1.1' 'cmake>=3.26' 'setuptools>=64' wheel
+export CUDNN_PATH=$(python -c 'import nvidia.cudnn; print(next(iter(nvidia.cudnn.__path__)))')
+export LD_LIBRARY_PATH="$CUDNN_PATH/lib:${LD_LIBRARY_PATH:-}"
+export CMAKE_BUILD_PARALLEL_LEVEL=4
+python -m pip wheel --no-deps --no-build-isolation . -w "$REPRO_DIR/wheels"
+python -m pip install --no-deps --target "$REPRO_DIR/patch" "$REPRO_DIR"/wheels/*.whl
+cp -a "$REPRO_DIR/patch" "$REPRO_DIR/base"
+curl -fL --retry 3 \
+  https://raw.githubusercontent.com/NVIDIA/cudnn-frontend/f2aa360e5a08436651d158cfad26b05b7db5ab92/python/cudnn/linear_attention/frost/common/steep_decay.py \
+  -o "$REPRO_DIR/base/cudnn/linear_attention/frost/common/steep_decay.py"
+find "$REPRO_DIR/base" "$REPRO_DIR/patch" -name '*.pyc' -delete
+mkdir "$REPRO_DIR/results"
+python -m pip freeze > "$REPRO_DIR/results/packages.txt"
+nvidia-smi -q > "$REPRO_DIR/results/nvidia-smi.txt"
+for arm in base-A1 patch-B1 patch-B2 base-A2; do
+  case "$arm" in base-*) variant=base ;; *) variant=patch ;; esac
+  PYTHONPATH="$REPRO_DIR/$variant" python \
+    test/python/linear_attention/benchmark_gdn2_steep_decay.py \
+    --label "$arm" --output "$REPRO_DIR/results/$arm.json"
+done
+python test/python/linear_attention/summarize_gdn2_steep_decay.py "$REPRO_DIR/results"
+```
+
+Copy the result directory out before removing the container.
+If running against another kernel revision, update the pinned base and compare runtime manifests again.
+Do not use an editable installation that resolves to another checkout. Each JSON records the actual import path and helper hash.
+
+The summarizer checks identical script/environment identities, repeated helper hashes, all six cases, and the FP64 pass flags.
+It averages the two per-arm medians for each variant. Keep all samples, including the mild controls.
+Synthetic output/gradient snapshots are saved alongside the JSON for paired numerical comparisons.
+
+## Recorded upstream evidence
+
+The raw ABBA records and a compact summary are in `benchmark_results/gdn2_steep_decay/`.
+The kernel revisions are upstream base `f2aa360e5a08436651d158cfad26b05b7db5ab92` and patch `ab9a46584daa6f3e134c7b1bf4b1074ca453710e`.
+Later commits in this PR update the standalone harness and documentation only.
+See the results README for measured values, provenance, and limitations.

@@ -1,0 +1,993 @@
+{
+  "label": "patch-B1",
+  "seed": 7082,
+  "gpu": "NVIDIA B300 SXM6 PC",
+  "capability": [
+    10,
+    3
+  ],
+  "torch": "2.9.0a0+145a3a7bda.nv25.10",
+  "cuda": "13.0",
+  "cudnn_file": "/mnt/data/scratch_alfred/cudnn1816-independent/run-105848/patch/cudnn/__init__.py",
+  "cudnn_backend": 92700,
+  "dsl": "4.7.0",
+  "helper_sha256": "5ec675e44aa058549dd9900a203aa64d4f2ee70f1bdd648ed7789383e981a581",
+  "script_sha256": "dcc4d3ff87475457b5f368e3e3a89bc961fcbd11cf79a1225924f5687cc0fd0e",
+  "results": [
+    {
+      "tokens": 16,
+      "heads": 1,
+      "dim": 64,
+      "steep_channels": 0,
+      "scheduler_records": [
+        {
+          "plan": "CompiledGdn2",
+          "chain": false,
+          "schedulers": {}
+        },
+        {
+          "plan": "CompiledGdn2Bwd",
+          "chain": false,
+          "schedulers": {
+            "scheduler_recompute": [
+              1,
+              0
+            ],
+            "scheduler_bwd": [
+              1,
+              0
+            ]
+          }
+        }
+      ],
+      "errors_fp64": {
+        "output": {
+          "relative_frobenius": 0.0036764707251840966,
+          "max_abs": 0.0004205049990138182
+        },
+        "q": {
+          "relative_frobenius": 0.00317294984992989,
+          "max_abs": 0.002609050249283429
+        },
+        "k": {
+          "relative_frobenius": 0.0031725536733328433,
+          "max_abs": 0.005206034103506063
+        },
+        "v": {
+          "relative_frobenius": 0.003801127705696674,
+          "max_abs": 0.00040051834629681315
+        },
+        "g": {
+          "relative_frobenius": 0.0044510427621645,
+          "max_abs": 0.000728015634613304
+        },
+        "b": {
+          "relative_frobenius": 0.004800157514295865,
+          "max_abs": 0.0002956146886730106
+        },
+        "w": {
+          "relative_frobenius": 0.0038872785583767638,
+          "max_abs": 0.001003315949392125
+        }
+      },
+      "correct_within_one_percent": true,
+      "eager": {
+        "median_ms": 1.6772159934043884,
+        "samples_ms": [
+          1.7431039810180664,
+          1.7847039699554443,
+          1.7141120433807373,
+          1.6953599452972412,
+          1.6766079664230347,
+          1.6276799440383911,
+          1.7229119539260864,
+          1.6577279567718506,
+          1.7278079986572266,
+          1.6778240203857422,
+          1.5324480533599854,
+          1.6085439920425415,
+          1.650015950202942,
+          1.6482880115509033,
+          1.652959942817688,
+          1.645408034324646,
+          1.7058559656143188,
+          1.528607964515686,
+          1.4809919595718384,
+          1.6026240587234497,
+          1.58787202835083,
+          1.6322879791259766,
+          1.8349759578704834,
+          1.7056000232696533,
+          1.7281279563903809,
+          1.7071679830551147,
+          1.7629120349884033,
+          1.7070080041885376,
+          1.727295994758606,
+          1.6641919612884521
+        ],
+        "calls_per_sample": 1
+      },
+      "gpu_busy": {
+        "median_ms": 0.03252789999999927,
+        "samples_ms": [
+          0.03237779999999989,
+          0.03252789999999927,
+          0.032502499999999504,
+          0.03259559999999885,
+          0.03253779999999974
+        ],
+        "calls_per_sample": 10,
+        "definition": "Union of GPU event intervals, excluding idle gaps, divided by calls"
+      },
+      "gpu_events": {
+        "cudnn_kernel_cutlass_frost_gdn2_prefill_prologue_16_1_TensorMapswizzleTensorMapSwizzles128b_3_dtypeclass_cutlassbase_dsltypingBFloat16_tma_formatTensorMapDataFormatDEFAULT_1_box_dims64_1_16_Ten_0": {
+          "count": 10,
+          "total_us": 21.633000000002085
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_prefill_Gdn2PrefillCfgio_dtypecutlassbase_dsltypingBFloat16state_dtypecutlassbase_dsltypingFloat32gate_dtypecutlassbase_dsltypingFloat32use_initial_stateFalsesto_1": {
+          "count": 10,
+          "total_us": 54.6879999999951
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_prefill_Gdn2PrefillCfgio_dtypecutlassbase_dsltypingBFloat16state_dtypecutlassbase_dsltypingFloat32gate_dtypecutlassbase_dsltypingFloat32use_initial_stateFalsesto_2": {
+          "count": 10,
+          "total_us": 21.982999999999265
+        },
+        "kernel_cutlass_frost_gdn2_regenerate_prologue_True_False_False_16_TensorMapswizzleTensorMapSwizzles128b_3_dtypeclass_cutlassbase_dsltypingBFloat16_tma_formatTensorMapDataFormatDEFAULT_1_b_0": {
+          "count": 10,
+          "total_us": 53.216999999998734
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_recompute_Gdn2RecomputeCfgio_dtypecutlassbase_dsltypingBFloat16state_dtypecutlassbase_dsltypingFloat32gate_dtypecutlassbase_dsltypingFloat32use_initial_stateFals_1": {
+          "count": 10,
+          "total_us": 48.513000000001284
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_recompute_Gdn2RecomputeCfgio_dtypecutlassbase_dsltypingBFloat16state_dtypecutlassbase_dsltypingFloat32gate_dtypecutlassbase_dsltypingFloat32use_initial_stateFals_2": {
+          "count": 10,
+          "total_us": 22.11299999999892
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_bprop_Gdn2BpropCfgio_dtypecutlassbase_dsltypingBFloat16gate_dtypecutlassbase_dsltypingFloat32use_dstate_inFalseuse_dstate0Falsel2normFalsesafe_gateFalsegate_scal_3": {
+          "count": 10,
+          "total_us": 82.59200000000055
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_bprop_Gdn2BpropCfgio_dtypecutlassbase_dsltypingBFloat16gate_dtypecutlassbase_dsltypingFloat32use_dstate_inFalseuse_dstate0Falsel2normFalsesafe_gateFalsegate_scal_4": {
+          "count": 10,
+          "total_us": 20.864000000000942
+        }
+      }
+    },
+    {
+      "tokens": 16,
+      "heads": 1,
+      "dim": 64,
+      "steep_channels": 1,
+      "scheduler_records": [
+        {
+          "plan": "CompiledGdn2",
+          "chain": false,
+          "schedulers": {}
+        },
+        {
+          "plan": "CompiledGdn2Bwd",
+          "chain": false,
+          "schedulers": {
+            "scheduler_recompute": [
+              1,
+              2
+            ],
+            "scheduler_bwd": [
+              1,
+              2
+            ]
+          }
+        }
+      ],
+      "errors_fp64": {
+        "output": {
+          "relative_frobenius": 0.003818840258316516,
+          "max_abs": 0.0003204993720290414
+        },
+        "q": {
+          "relative_frobenius": 0.0031182198109775973,
+          "max_abs": 0.003094193697705694
+        },
+        "k": {
+          "relative_frobenius": 0.003286165115794172,
+          "max_abs": 0.0032413079592124028
+        },
+        "v": {
+          "relative_frobenius": 0.0038058236395433587,
+          "max_abs": 0.0004475776418816635
+        },
+        "g": {
+          "relative_frobenius": 0.004186561052974603,
+          "max_abs": 0.0007261842475697641
+        },
+        "b": {
+          "relative_frobenius": 0.004389993433254164,
+          "max_abs": 0.00021631827096616277
+        },
+        "w": {
+          "relative_frobenius": 0.003980840227627386,
+          "max_abs": 0.0011903580367300937
+        }
+      },
+      "correct_within_one_percent": true,
+      "eager": {
+        "median_ms": 1.783791959285736,
+        "samples_ms": [
+          1.8280960321426392,
+          1.6542400121688843,
+          1.7922879457473755,
+          1.7187520265579224,
+          1.8398079872131348,
+          1.7081600427627563,
+          1.8084160089492798,
+          1.8280320167541504,
+          1.7687040567398071,
+          1.8137919902801514,
+          1.7636799812316895,
+          1.7085440158843994,
+          1.70796799659729,
+          1.803871989250183,
+          1.741312026977539,
+          1.7408640384674072,
+          1.7752959728240967,
+          1.891327977180481,
+          1.9081599712371826,
+          1.8526400327682495,
+          1.808608055114746,
+          1.6856640577316284,
+          1.801184058189392,
+          1.7956479787826538,
+          1.7250880002975464,
+          1.7193599939346313,
+          1.7327040433883667,
+          1.8787519931793213,
+          1.7528959512710571,
+          1.8218239545822144
+        ],
+        "calls_per_sample": 1
+      },
+      "gpu_busy": {
+        "median_ms": 0.06624090000000085,
+        "samples_ms": [
+          0.06628160000000016,
+          0.0663137999999999,
+          0.06624090000000085,
+          0.06621789999999947,
+          0.06623679999999922
+        ],
+        "calls_per_sample": 10,
+        "definition": "Union of GPU event intervals, excluding idle gaps, divided by calls"
+      },
+      "gpu_events": {
+        "cudnn_kernel_cutlass_frost_gdn2_prefill_prologue_16_1_TensorMapswizzleTensorMapSwizzles128b_3_dtypeclass_cutlassbase_dsltypingBFloat16_tma_formatTensorMapDataFormatDEFAULT_1_box_dims64_1_16_Ten_0": {
+          "count": 10,
+          "total_us": 20.063000000005104
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_prefill_Gdn2PrefillCfgio_dtypecutlassbase_dsltypingBFloat16state_dtypecutlassbase_dsltypingFloat32gate_dtypecutlassbase_dsltypingFloat32use_initial_stateFalsesto_1": {
+          "count": 10,
+          "total_us": 54.87799999999743
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_prefill_Gdn2PrefillCfgio_dtypecutlassbase_dsltypingBFloat16state_dtypecutlassbase_dsltypingFloat32gate_dtypecutlassbase_dsltypingFloat32use_initial_stateFalsesto_2": {
+          "count": 10,
+          "total_us": 92.22400000000198
+        },
+        "kernel_cutlass_frost_gdn2_regenerate_prologue_True_False_False_16_TensorMapswizzleTensorMapSwizzles128b_3_dtypeclass_cutlassbase_dsltypingBFloat16_tma_formatTensorMapDataFormatDEFAULT_1_b_0": {
+          "count": 10,
+          "total_us": 53.47100000000228
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_recompute_Gdn2RecomputeCfgio_dtypecutlassbase_dsltypingBFloat16state_dtypecutlassbase_dsltypingFloat32gate_dtypecutlassbase_dsltypingFloat32use_initial_stateFals_1": {
+          "count": 10,
+          "total_us": 48.76900000000296
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_recompute_Gdn2RecomputeCfgio_dtypecutlassbase_dsltypingBFloat16state_dtypecutlassbase_dsltypingFloat32gate_dtypecutlassbase_dsltypingFloat32use_initial_stateFals_2": {
+          "count": 10,
+          "total_us": 86.14399999999841
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_bprop_Gdn2BpropCfgio_dtypecutlassbase_dsltypingBFloat16gate_dtypecutlassbase_dsltypingFloat32use_dstate_inFalseuse_dstate0Falsel2normFalsesafe_gateFalsegate_scal_3": {
+          "count": 10,
+          "total_us": 84.83299999999599
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_bprop_Gdn2BpropCfgio_dtypecutlassbase_dsltypingBFloat16gate_dtypecutlassbase_dsltypingFloat32use_dstate_inFalseuse_dstate0Falsel2normFalsesafe_gateFalsegate_scal_4": {
+          "count": 10,
+          "total_us": 227.1690000000035
+        }
+      }
+    },
+    {
+      "tokens": 16,
+      "heads": 1,
+      "dim": 64,
+      "steep_channels": 64,
+      "scheduler_records": [
+        {
+          "plan": "CompiledGdn2",
+          "chain": false,
+          "schedulers": {}
+        },
+        {
+          "plan": "CompiledGdn2Bwd",
+          "chain": false,
+          "schedulers": {
+            "scheduler_recompute": [
+              1,
+              2
+            ],
+            "scheduler_bwd": [
+              1,
+              2
+            ]
+          }
+        }
+      ],
+      "errors_fp64": {
+        "output": {
+          "relative_frobenius": 0.0025012706223259255,
+          "max_abs": 0.00019169303823218797
+        },
+        "q": {
+          "relative_frobenius": 0.0016177999045790174,
+          "max_abs": 0.0008407589458412357
+        },
+        "k": {
+          "relative_frobenius": 0.0016870544014318098,
+          "max_abs": 0.0009530866918937009
+        },
+        "v": {
+          "relative_frobenius": 0.0022400059071366126,
+          "max_abs": 0.0001516020887189634
+        },
+        "g": {
+          "relative_frobenius": 0.0019374876085910143,
+          "max_abs": 6.664210988788807e-07
+        },
+        "b": {
+          "relative_frobenius": 0.0027935212053676957,
+          "max_abs": 1.7308478930000453e-07
+        },
+        "w": {
+          "relative_frobenius": 0.0031375250401037896,
+          "max_abs": 0.0005855708078184585
+        }
+      },
+      "correct_within_one_percent": true,
+      "eager": {
+        "median_ms": 1.6860479712486267,
+        "samples_ms": [
+          1.7191040515899658,
+          1.720128059387207,
+          1.7300159931182861,
+          1.7587840557098389,
+          1.6448320150375366,
+          1.7313920259475708,
+          1.5982400178909302,
+          1.6003199815750122,
+          1.422719955444336,
+          1.6501760482788086,
+          1.8414080142974854,
+          1.6966079473495483,
+          1.6821759939193726,
+          1.6815680265426636,
+          1.790336012840271,
+          1.6687359809875488,
+          1.6899199485778809,
+          1.7684160470962524,
+          1.4782719612121582,
+          1.628383994102478,
+          1.4657280445098877,
+          1.4724479913711548,
+          1.9494719505310059,
+          1.7083200216293335,
+          1.5960639715194702,
+          1.8135360479354858,
+          1.7154560089111328,
+          1.7133439779281616,
+          1.5912319421768188,
+          1.6571840047836304
+        ],
+        "calls_per_sample": 1
+      },
+      "gpu_busy": {
+        "median_ms": 0.12513710000000133,
+        "samples_ms": [
+          0.12513710000000133,
+          0.12505369999999955,
+          0.1251778999999995,
+          0.1252068999999993,
+          0.12512400000000048
+        ],
+        "calls_per_sample": 10,
+        "definition": "Union of GPU event intervals, excluding idle gaps, divided by calls"
+      },
+      "gpu_events": {
+        "cudnn_kernel_cutlass_frost_gdn2_prefill_prologue_16_1_TensorMapswizzleTensorMapSwizzles128b_3_dtypeclass_cutlassbase_dsltypingBFloat16_tma_formatTensorMapDataFormatDEFAULT_1_box_dims64_1_16_Ten_0": {
+          "count": 10,
+          "total_us": 20.065000000004602
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_prefill_Gdn2PrefillCfgio_dtypecutlassbase_dsltypingBFloat16state_dtypecutlassbase_dsltypingFloat32gate_dtypecutlassbase_dsltypingFloat32use_initial_stateFalsesto_1": {
+          "count": 10,
+          "total_us": 54.655000000000655
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_prefill_Gdn2PrefillCfgio_dtypecutlassbase_dsltypingBFloat16state_dtypecutlassbase_dsltypingFloat32gate_dtypecutlassbase_dsltypingFloat32use_initial_stateFalsesto_2": {
+          "count": 10,
+          "total_us": 252.44900000000098
+        },
+        "kernel_cutlass_frost_gdn2_regenerate_prologue_True_False_False_16_TensorMapswizzleTensorMapSwizzles128b_3_dtypeclass_cutlassbase_dsltypingBFloat16_tma_formatTensorMapDataFormatDEFAULT_1_b_0": {
+          "count": 10,
+          "total_us": 53.28200000000106
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_recompute_Gdn2RecomputeCfgio_dtypecutlassbase_dsltypingBFloat16state_dtypecutlassbase_dsltypingFloat32gate_dtypecutlassbase_dsltypingFloat32use_initial_stateFals_1": {
+          "count": 10,
+          "total_us": 48.577000000000226
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_recompute_Gdn2RecomputeCfgio_dtypecutlassbase_dsltypingBFloat16state_dtypecutlassbase_dsltypingFloat32gate_dtypecutlassbase_dsltypingFloat32use_initial_stateFals_2": {
+          "count": 10,
+          "total_us": 233.95500000000447
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_bprop_Gdn2BpropCfgio_dtypecutlassbase_dsltypingBFloat16gate_dtypecutlassbase_dsltypingFloat32use_dstate_inFalseuse_dstate0Falsel2normFalsesafe_gateFalsegate_scal_3": {
+          "count": 10,
+          "total_us": 84.7029999999977
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_bprop_Gdn2BpropCfgio_dtypecutlassbase_dsltypingBFloat16gate_dtypecutlassbase_dsltypingFloat32use_dstate_inFalseuse_dstate0Falsel2normFalsesafe_gateFalsegate_scal_4": {
+          "count": 10,
+          "total_us": 508.7400000000034
+        }
+      }
+    },
+    {
+      "tokens": 256,
+      "heads": 1,
+      "dim": 64,
+      "steep_channels": 0,
+      "scheduler_records": [
+        {
+          "plan": "CompiledGdn2",
+          "chain": true,
+          "schedulers": {
+            "scheduler_prefill": [
+              4,
+              0
+            ],
+            "scheduler_h": [
+              4,
+              0
+            ],
+            "scheduler_m": [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "plan": "CompiledGdn2Bwd",
+          "chain": true,
+          "schedulers": {
+            "scheduler_recompute": [
+              4,
+              0
+            ],
+            "scheduler_bwd": [
+              4,
+              0
+            ],
+            "scheduler_summary": [
+              4,
+              0
+            ],
+            "scheduler_m": [
+              0,
+              0
+            ],
+            "scheduler_series": [
+              4,
+              0
+            ]
+          }
+        }
+      ],
+      "errors_fp64": {
+        "output": {
+          "relative_frobenius": 0.0042219570339547445,
+          "max_abs": 0.0007297256167282384
+        },
+        "q": {
+          "relative_frobenius": 0.003834921418949064,
+          "max_abs": 0.004957357945899354
+        },
+        "k": {
+          "relative_frobenius": 0.004064275308172518,
+          "max_abs": 0.006402331537181172
+        },
+        "v": {
+          "relative_frobenius": 0.003835631157448777,
+          "max_abs": 0.0006969029900009693
+        },
+        "g": {
+          "relative_frobenius": 0.003933115320154268,
+          "max_abs": 0.003127622949379386
+        },
+        "b": {
+          "relative_frobenius": 0.005414837691952803,
+          "max_abs": 0.0008800205013725915
+        },
+        "w": {
+          "relative_frobenius": 0.004139204899040753,
+          "max_abs": 0.0031531796729263872
+        }
+      },
+      "correct_within_one_percent": true,
+      "eager": {
+        "median_ms": 1.8397600054740906,
+        "samples_ms": [
+          1.8538240194320679,
+          1.9534720182418823,
+          1.9534080028533936,
+          1.7544000148773193,
+          1.8968640565872192,
+          1.8256959915161133,
+          2.058880090713501,
+          2.0242559909820557,
+          1.8721920251846313,
+          1.8779200315475464,
+          1.895583987236023,
+          1.818560004234314,
+          1.7566720247268677,
+          1.7081600427627563,
+          1.8046079874038696,
+          1.8158719539642334,
+          1.8958079814910889,
+          1.8889919519424438,
+          1.7769919633865356,
+          1.6516799926757812,
+          1.7371519804000854,
+          1.882815957069397,
+          1.9304640293121338,
+          1.7761919498443604,
+          1.7693439722061157,
+          1.99891197681427,
+          1.8757439851760864,
+          1.7811520099639893,
+          1.772320032119751,
+          1.8079040050506592
+        ],
+        "calls_per_sample": 1
+      },
+      "gpu_busy": {
+        "median_ms": 0.09812810000000108,
+        "samples_ms": [
+          0.09818209999999974,
+          0.09808700000000026,
+          0.09794919999999945,
+          0.0981704000000007,
+          0.09812810000000108
+        ],
+        "calls_per_sample": 10,
+        "definition": "Union of GPU event intervals, excluding idle gaps, divided by calls"
+      },
+      "gpu_events": {
+        "cudnn_kernel_cutlass_frost_gdn2_chain_prologue__1_16_False__TensorMapswizzleTensorMapSwizzles128b_3_dtypeclass_cutlassbase_dsltypingBFloat16_tma_formatTensorMapDataFormatDEFAULT_1_box_dims64_1__0": {
+          "count": 20,
+          "total_us": 166.72000000000185
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_summary_Gdn2SummaryCfgio_dtypecutlassbase_dsltypingBFloat16gate_dtypecutlassbase_dsltypingFloat32use_initial_stateFalsel2normFalsesafe_gateFalsegate_scale_log272_1": {
+          "count": 20,
+          "total_us": 175.93299999999545
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_summary_Gdn2SummaryCfgio_dtypecutlassbase_dsltypingBFloat16gate_dtypecutlassbase_dsltypingFloat32use_initial_stateFalsel2normFalsesafe_gateFalsegate_scale_log272_2": {
+          "count": 20,
+          "total_us": 39.26100000000042
+        },
+        "cudnn_kernel_cutlass_frost_state_chain__64_64_8__False_False_False_False__tensorptrf32_gmem_align16_o_i64i64i641_tensorptrf32gmemalign16oi64i64i641_tensorptrf32_gmem_align16_o_i64i64i641_None_N_3": {
+          "count": 20,
+          "total_us": 79.16800000000421
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_prefill_Gdn2PrefillCfgio_dtypecutlassbase_dsltypingBFloat16state_dtypecutlassbase_dsltypingFloat32gate_dtypecutlassbase_dsltypingFloat32use_initial_stateTruestor_4": {
+          "count": 10,
+          "total_us": 80.4139999999993
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_prefill_Gdn2PrefillCfgio_dtypecutlassbase_dsltypingBFloat16state_dtypecutlassbase_dsltypingFloat32gate_dtypecutlassbase_dsltypingFloat32use_initial_stateTruestor_5": {
+          "count": 10,
+          "total_us": 18.87699999999859
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_bprop_summary_Gdn2BpropSummaryCfgio_dtypecutlassbase_dsltypingBFloat16gate_dtypecutlassbase_dsltypingFloat32use_dstate_inFalseuse_dstate0Truel2normFalsesafe_gate_4": {
+          "count": 10,
+          "total_us": 90.94499999999698
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_bprop_summary_Gdn2BpropSummaryCfgio_dtypecutlassbase_dsltypingBFloat16gate_dtypecutlassbase_dsltypingFloat32use_dstate_inFalseuse_dstate0Truel2normFalsesafe_gate_5": {
+          "count": 10,
+          "total_us": 18.911000000003696
+        },
+        "cudnn_kernel_cutlass_frost_state_chain__64_64_8__True_False_False_False__tensorptrf32_gmem_align16_o_i64i64i641_tensorptrf32gmemalign16oi64i64i641_tensorptrf32_gmem_align16_o_i64i64i641_None_No_6": {
+          "count": 10,
+          "total_us": 41.85699999999815
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_recompute_Gdn2RecomputeCfgio_dtypecutlassbase_dsltypingBFloat16state_dtypecutlassbase_dsltypingFloat32gate_dtypecutlassbase_dsltypingFloat32use_initial_stateTrue_7": {
+          "count": 10,
+          "total_us": 85.73000000000047
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_recompute_Gdn2RecomputeCfgio_dtypecutlassbase_dsltypingBFloat16state_dtypecutlassbase_dsltypingFloat32gate_dtypecutlassbase_dsltypingFloat32use_initial_stateTrue_8": {
+          "count": 10,
+          "total_us": 20.192000000003645
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_bprop_Gdn2BpropCfgio_dtypecutlassbase_dsltypingBFloat16gate_dtypecutlassbase_dsltypingFloat32use_dstate_inTrueuse_dstate0Falsel2normFalsesafe_gateFalsegate_scale_9": {
+          "count": 10,
+          "total_us": 161.15200000000095
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_bprop_Gdn2BpropCfgio_dtypecutlassbase_dsltypingBFloat16gate_dtypecutlassbase_dsltypingFloat32use_dstate_inTrueuse_dstate0Falsel2normFalsesafe_gateFalsegate_scale_10": {
+          "count": 10,
+          "total_us": 19.71100000000024
+        }
+      }
+    },
+    {
+      "tokens": 256,
+      "heads": 1,
+      "dim": 64,
+      "steep_channels": 1,
+      "scheduler_records": [
+        {
+          "plan": "CompiledGdn2",
+          "chain": true,
+          "schedulers": {
+            "scheduler_prefill": [
+              4,
+              5
+            ],
+            "scheduler_h": [
+              4,
+              5
+            ],
+            "scheduler_m": [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "plan": "CompiledGdn2Bwd",
+          "chain": true,
+          "schedulers": {
+            "scheduler_recompute": [
+              4,
+              5
+            ],
+            "scheduler_bwd": [
+              4,
+              5
+            ],
+            "scheduler_summary": [
+              4,
+              5
+            ],
+            "scheduler_m": [
+              0,
+              0
+            ],
+            "scheduler_series": [
+              4,
+              5
+            ]
+          }
+        }
+      ],
+      "errors_fp64": {
+        "output": {
+          "relative_frobenius": 0.004210334531090852,
+          "max_abs": 0.0007666786762775823
+        },
+        "q": {
+          "relative_frobenius": 0.0038423155287765722,
+          "max_abs": 0.004704394339996143
+        },
+        "k": {
+          "relative_frobenius": 0.00404433013117986,
+          "max_abs": 0.00585458566984598
+        },
+        "v": {
+          "relative_frobenius": 0.003875158727482454,
+          "max_abs": 0.0008372362995468507
+        },
+        "g": {
+          "relative_frobenius": 0.003922128768867071,
+          "max_abs": 0.0031923826599982025
+        },
+        "b": {
+          "relative_frobenius": 0.0053741546674219666,
+          "max_abs": 0.0008081990187432941
+        },
+        "w": {
+          "relative_frobenius": 0.004207899948002079,
+          "max_abs": 0.0033722320671161765
+        }
+      },
+      "correct_within_one_percent": true,
+      "eager": {
+        "median_ms": 1.7983999848365784,
+        "samples_ms": [
+          1.7525440454483032,
+          1.7357439994812012,
+          1.815392017364502,
+          1.75929594039917,
+          1.5295360088348389,
+          1.4597439765930176,
+          1.7889599800109863,
+          1.9494400024414062,
+          1.8335039615631104,
+          1.8172160387039185,
+          1.9015040397644043,
+          1.9556159973144531,
+          1.81769597530365,
+          1.8085119724273682,
+          1.6271040439605713,
+          1.8003519773483276,
+          1.9243199825286865,
+          2.069535970687866,
+          1.7670400142669678,
+          1.8775039911270142,
+          1.6337920427322388,
+          1.796447992324829,
+          1.8675199747085571,
+          1.565440058708191,
+          1.7642560005187988,
+          1.73689603805542,
+          1.687999963760376,
+          1.8335039615631104,
+          1.8421759605407715,
+          1.7649600505828857
+        ],
+        "calls_per_sample": 1
+      },
+      "gpu_busy": {
+        "median_ms": 0.2656747999999995,
+        "samples_ms": [
+          0.26564599999999927,
+          0.26567850000000004,
+          0.2657674,
+          0.2656747999999995,
+          0.2655915000000001
+        ],
+        "calls_per_sample": 10,
+        "definition": "Union of GPU event intervals, excluding idle gaps, divided by calls"
+      },
+      "gpu_events": {
+        "cudnn_kernel_cutlass_frost_gdn2_chain_prologue__1_16_False__TensorMapswizzleTensorMapSwizzles128b_3_dtypeclass_cutlassbase_dsltypingBFloat16_tma_formatTensorMapDataFormatDEFAULT_1_box_dims64_1__0": {
+          "count": 20,
+          "total_us": 166.46199999999862
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_summary_Gdn2SummaryCfgio_dtypecutlassbase_dsltypingBFloat16gate_dtypecutlassbase_dsltypingFloat32use_initial_stateFalsel2normFalsesafe_gateFalsegate_scale_log272_1": {
+          "count": 20,
+          "total_us": 177.25000000000284
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_summary_Gdn2SummaryCfgio_dtypecutlassbase_dsltypingBFloat16gate_dtypecutlassbase_dsltypingFloat32use_initial_stateFalsel2normFalsesafe_gateFalsegate_scale_log272_2": {
+          "count": 20,
+          "total_us": 311.29599999999994
+        },
+        "cudnn_kernel_cutlass_frost_state_chain__64_64_8__False_False_False_False__tensorptrf32_gmem_align16_o_i64i64i641_tensorptrf32gmemalign16oi64i64i641_tensorptrf32_gmem_align16_o_i64i64i641_None_N_3": {
+          "count": 20,
+          "total_us": 79.48800000000301
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_prefill_Gdn2PrefillCfgio_dtypecutlassbase_dsltypingBFloat16state_dtypecutlassbase_dsltypingFloat32gate_dtypecutlassbase_dsltypingFloat32use_initial_stateTruestor_4": {
+          "count": 10,
+          "total_us": 80.38499999999829
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_prefill_Gdn2PrefillCfgio_dtypecutlassbase_dsltypingBFloat16state_dtypecutlassbase_dsltypingFloat32gate_dtypecutlassbase_dsltypingFloat32use_initial_stateTruestor_5": {
+          "count": 10,
+          "total_us": 149.05700000000104
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_bprop_summary_Gdn2BpropSummaryCfgio_dtypecutlassbase_dsltypingBFloat16gate_dtypecutlassbase_dsltypingFloat32use_dstate_inFalseuse_dstate0Truel2normFalsesafe_gate_4": {
+          "count": 10,
+          "total_us": 92.28899999999703
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_bprop_summary_Gdn2BpropSummaryCfgio_dtypecutlassbase_dsltypingBFloat16gate_dtypecutlassbase_dsltypingFloat32use_dstate_inFalseuse_dstate0Truel2normFalsesafe_gate_5": {
+          "count": 10,
+          "total_us": 246.14600000000155
+        },
+        "cudnn_kernel_cutlass_frost_state_chain__64_64_8__True_False_False_False__tensorptrf32_gmem_align16_o_i64i64i641_tensorptrf32gmemalign16oi64i64i641_tensorptrf32_gmem_align16_o_i64i64i641_None_No_6": {
+          "count": 10,
+          "total_us": 42.143000000000484
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_recompute_Gdn2RecomputeCfgio_dtypecutlassbase_dsltypingBFloat16state_dtypecutlassbase_dsltypingFloat32gate_dtypecutlassbase_dsltypingFloat32use_initial_stateTrue_7": {
+          "count": 10,
+          "total_us": 86.43200000000161
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_recompute_Gdn2RecomputeCfgio_dtypecutlassbase_dsltypingBFloat16state_dtypecutlassbase_dsltypingFloat32gate_dtypecutlassbase_dsltypingFloat32use_initial_stateTrue_8": {
+          "count": 10,
+          "total_us": 146.55900000000156
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_bprop_Gdn2BpropCfgio_dtypecutlassbase_dsltypingBFloat16gate_dtypecutlassbase_dsltypingFloat32use_dstate_inTrueuse_dstate0Falsel2normFalsesafe_gateFalsegate_scale_9": {
+          "count": 10,
+          "total_us": 162.84699999999611
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_bprop_Gdn2BpropCfgio_dtypecutlassbase_dsltypingBFloat16gate_dtypecutlassbase_dsltypingFloat32use_dstate_inTrueuse_dstate0Falsel2normFalsesafe_gateFalsegate_scale_10": {
+          "count": 10,
+          "total_us": 940.9659999999985
+        }
+      }
+    },
+    {
+      "tokens": 256,
+      "heads": 1,
+      "dim": 64,
+      "steep_channels": 64,
+      "scheduler_records": [
+        {
+          "plan": "CompiledGdn2",
+          "chain": true,
+          "schedulers": {
+            "scheduler_prefill": [
+              4,
+              5
+            ],
+            "scheduler_h": [
+              4,
+              5
+            ],
+            "scheduler_m": [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "plan": "CompiledGdn2Bwd",
+          "chain": true,
+          "schedulers": {
+            "scheduler_recompute": [
+              4,
+              5
+            ],
+            "scheduler_bwd": [
+              4,
+              5
+            ],
+            "scheduler_summary": [
+              4,
+              5
+            ],
+            "scheduler_m": [
+              0,
+              0
+            ],
+            "scheduler_series": [
+              4,
+              5
+            ]
+          }
+        }
+      ],
+      "errors_fp64": {
+        "output": {
+          "relative_frobenius": 0.0025094558361049737,
+          "max_abs": 0.0002350383017460933
+        },
+        "q": {
+          "relative_frobenius": 0.0016596228643026866,
+          "max_abs": 0.0009610730157141312
+        },
+        "k": {
+          "relative_frobenius": 0.001637915140313399,
+          "max_abs": 0.0010137068716817854
+        },
+        "v": {
+          "relative_frobenius": 0.0024547074545833896,
+          "max_abs": 0.0002714640803386237
+        },
+        "g": {
+          "relative_frobenius": 0.0016680238187954562,
+          "max_abs": 6.047761627374034e-07
+        },
+        "b": {
+          "relative_frobenius": 0.0045550190016499315,
+          "max_abs": 3.771294965644996e-07
+        },
+        "w": {
+          "relative_frobenius": 0.002934484336951365,
+          "max_abs": 0.0008232150717704667
+        }
+      },
+      "correct_within_one_percent": true,
+      "eager": {
+        "median_ms": 1.8178880214691162,
+        "samples_ms": [
+          1.831007957458496,
+          1.7845760583877563,
+          1.8159680366516113,
+          2.0317440032958984,
+          1.854207992553711,
+          1.8468799591064453,
+          1.727776050567627,
+          1.6441279649734497,
+          1.8234879970550537,
+          1.8201600313186646,
+          1.8707200288772583,
+          1.7198400497436523,
+          1.8891520500183105,
+          1.7611520290374756,
+          1.8736640214920044,
+          1.831488013267517,
+          1.7703360319137573,
+          1.877344012260437,
+          1.711359977722168,
+          1.6930240392684937,
+          1.819808006286621,
+          1.9352960586547852,
+          1.746880054473877,
+          1.7544959783554077,
+          1.7702720165252686,
+          1.8577920198440552,
+          1.8792959451675415,
+          1.6705600023269653,
+          1.7064319849014282,
+          1.470687985420227
+        ],
+        "calls_per_sample": 1
+      },
+      "gpu_busy": {
+        "median_ms": 0.5599799999999997,
+        "samples_ms": [
+          0.5598745000000006,
+          0.5599636000000002,
+          0.5599799999999997,
+          0.5600598999999999,
+          0.5600604999999996
+        ],
+        "calls_per_sample": 10,
+        "definition": "Union of GPU event intervals, excluding idle gaps, divided by calls"
+      },
+      "gpu_events": {
+        "cudnn_kernel_cutlass_frost_gdn2_chain_prologue__1_16_False__TensorMapswizzleTensorMapSwizzles128b_3_dtypeclass_cutlassbase_dsltypingBFloat16_tma_formatTensorMapDataFormatDEFAULT_1_box_dims64_1__0": {
+          "count": 20,
+          "total_us": 165.98700000000554
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_summary_Gdn2SummaryCfgio_dtypecutlassbase_dsltypingBFloat16gate_dtypecutlassbase_dsltypingFloat32use_initial_stateFalsel2normFalsesafe_gateFalsegate_scale_log272_1": {
+          "count": 20,
+          "total_us": 176.96099999999842
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_summary_Gdn2SummaryCfgio_dtypecutlassbase_dsltypingBFloat16gate_dtypecutlassbase_dsltypingFloat32use_initial_stateFalsel2normFalsesafe_gateFalsegate_scale_log272_2": {
+          "count": 20,
+          "total_us": 930.1800000000054
+        },
+        "cudnn_kernel_cutlass_frost_state_chain__64_64_8__False_False_False_False__tensorptrf32_gmem_align16_o_i64i64i641_tensorptrf32gmemalign16oi64i64i641_tensorptrf32_gmem_align16_o_i64i64i641_None_N_3": {
+          "count": 20,
+          "total_us": 79.48600000000079
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_prefill_Gdn2PrefillCfgio_dtypecutlassbase_dsltypingBFloat16state_dtypecutlassbase_dsltypingFloat32gate_dtypecutlassbase_dsltypingFloat32use_initial_stateTruestor_4": {
+          "count": 10,
+          "total_us": 80.89700000000107
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_prefill_Gdn2PrefillCfgio_dtypecutlassbase_dsltypingBFloat16state_dtypecutlassbase_dsltypingFloat32gate_dtypecutlassbase_dsltypingFloat32use_initial_stateTruestor_5": {
+          "count": 10,
+          "total_us": 487.6510000000044
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_bprop_summary_Gdn2BpropSummaryCfgio_dtypecutlassbase_dsltypingBFloat16gate_dtypecutlassbase_dsltypingFloat32use_dstate_inFalseuse_dstate0Truel2normFalsesafe_gate_4": {
+          "count": 10,
+          "total_us": 92.44500000000244
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_bprop_summary_Gdn2BpropSummaryCfgio_dtypecutlassbase_dsltypingBFloat16gate_dtypecutlassbase_dsltypingFloat32use_dstate_inFalseuse_dstate0Truel2normFalsesafe_gate_5": {
+          "count": 10,
+          "total_us": 1031.7479999999964
+        },
+        "cudnn_kernel_cutlass_frost_state_chain__64_64_8__True_False_False_False__tensorptrf32_gmem_align16_o_i64i64i641_tensorptrf32gmemalign16oi64i64i641_tensorptrf32_gmem_align16_o_i64i64i641_None_No_6": {
+          "count": 10,
+          "total_us": 42.49600000000055
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_recompute_Gdn2RecomputeCfgio_dtypecutlassbase_dsltypingBFloat16state_dtypecutlassbase_dsltypingFloat32gate_dtypecutlassbase_dsltypingFloat32use_initial_stateTrue_7": {
+          "count": 10,
+          "total_us": 86.17599999999811
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_recompute_Gdn2RecomputeCfgio_dtypecutlassbase_dsltypingBFloat16state_dtypecutlassbase_dsltypingFloat32gate_dtypecutlassbase_dsltypingFloat32use_initial_stateTrue_8": {
+          "count": 10,
+          "total_us": 454.49799999999595
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_bprop_Gdn2BpropCfgio_dtypecutlassbase_dsltypingBFloat16gate_dtypecutlassbase_dsltypingFloat32use_dstate_inTrueuse_dstate0Falsel2normFalsesafe_gateFalsegate_scale_9": {
+          "count": 10,
+          "total_us": 161.12000000000717
+        },
+        "cudnn_kernel_cutlass_frost_gdn2_bprop_Gdn2BpropCfgio_dtypecutlassbase_dsltypingBFloat16gate_dtypecutlassbase_dsltypingFloat32use_dstate_inTrueuse_dstate0Falsel2normFalsesafe_gateFalsegate_scale_10": {
+          "count": 10,
+          "total_us": 1834.215999999998
+        }
+      }
+    }
+  ]
+}
